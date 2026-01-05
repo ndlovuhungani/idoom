@@ -9,15 +9,22 @@ export interface ExcelData {
   instagramLinks: Array<{ row: number; url: string }>;
 }
 
-// Instagram URL patterns
-const INSTAGRAM_URL_PATTERN = /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:reel|p)\/([A-Za-z0-9_-]+)/i;
+// Instagram URL patterns - flexible to match various formats
+const INSTAGRAM_URL_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i;
+
+// Fallback pattern for any instagram.com URL
+const INSTAGRAM_DOMAIN_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)/i;
 
 export function isInstagramUrl(url: string): boolean {
-  return INSTAGRAM_URL_PATTERN.test(url);
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim().replace(/^["']|["']$/g, ''); // Remove quotes and whitespace
+  return INSTAGRAM_URL_PATTERN.test(trimmed) || INSTAGRAM_DOMAIN_PATTERN.test(trimmed);
 }
 
 export function extractInstagramId(url: string): string | null {
-  const match = url.match(INSTAGRAM_URL_PATTERN);
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim().replace(/^["']|["']$/g, '');
+  const match = trimmed.match(INSTAGRAM_URL_PATTERN);
   return match ? match[1] : null;
 }
 
@@ -46,11 +53,11 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
 
         // Check header row first
         if (jsonData.length > 0) {
-          const headerRow = jsonData[0].map((cell) => String(cell).toLowerCase());
+          const headerRow = jsonData[0].map((cell) => String(cell).toLowerCase().trim());
           
-          // Look for link/url column
+          // Look for link/url column with flexible matching
           linkColumnIndex = headerRow.findIndex(
-            (h) => h.includes('link') || h.includes('url') || h.includes('instagram')
+            (h) => h.includes('link') || h.includes('url') || h.includes('instagram') || h.includes('reel') || h.includes('post')
           );
 
           // Look for views column
@@ -59,13 +66,14 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
           );
         }
 
-        // If no header match, scan for Instagram URLs
+        // If no header match, scan all columns for Instagram URLs
         if (linkColumnIndex === -1) {
-          for (let row = 0; row < Math.min(jsonData.length, 10); row++) {
-            for (let col = 0; col < (jsonData[row]?.length || 0); col++) {
-              const cellValue = String(jsonData[row][col] || '');
+          for (let col = 0; col < (jsonData[0]?.length || 0); col++) {
+            for (let row = 0; row < Math.min(jsonData.length, 20); row++) {
+              const cellValue = String(jsonData[row]?.[col] || '').trim().replace(/^["']|["']$/g, '');
               if (isInstagramUrl(cellValue)) {
                 linkColumnIndex = col;
+                console.log('Found Instagram URL in column', col, 'row', row, ':', cellValue);
                 break;
               }
             }
@@ -85,10 +93,16 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
         // Extract all Instagram links with their row numbers
         const instagramLinks: Array<{ row: number; url: string }> = [];
         for (let row = 1; row < jsonData.length; row++) {
-          const cellValue = String(jsonData[row]?.[linkColumnIndex] || '');
-          if (isInstagramUrl(cellValue)) {
+          const rawValue = jsonData[row]?.[linkColumnIndex];
+          const cellValue = String(rawValue || '').trim().replace(/^["']|["']$/g, '');
+          if (cellValue && isInstagramUrl(cellValue)) {
             instagramLinks.push({ row, url: cellValue });
           }
+        }
+
+        console.log('Total rows:', jsonData.length, 'Instagram links found:', instagramLinks.length);
+        if (instagramLinks.length === 0) {
+          console.log('Sample data from link column:', jsonData.slice(0, 5).map(r => r?.[linkColumnIndex]));
         }
 
         resolve({
