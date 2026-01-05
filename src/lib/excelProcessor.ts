@@ -127,34 +127,43 @@ export function updateExcelWithViews(
   excelData: ExcelData,
   viewsMap: Map<number, number | string>
 ): Blob {
-  const { workbook, sheetName, data, viewsColumnIndex } = excelData;
+  const { workbook, sheetName, viewsColumnIndex } = excelData;
+  
+  // Get the original worksheet - don't replace it to preserve formatting
+  const worksheet = workbook.Sheets[sheetName];
 
-  // Update the data array with views
-  const updatedData = data.map((row, index) => {
-    if (index === 0) {
-      // Ensure header has views column
-      const newRow = [...row];
-      if (!newRow[viewsColumnIndex]) {
-        newRow[viewsColumnIndex] = 'Views';
-      }
-      return newRow;
+  // Update header if views column doesn't have a header
+  const headerAddr = XLSX.utils.encode_cell({ r: 0, c: viewsColumnIndex });
+  if (!worksheet[headerAddr] || !worksheet[headerAddr].v) {
+    worksheet[headerAddr] = { t: 's', v: 'Views' };
+  }
+
+  // Update only the cells that need views data
+  viewsMap.forEach((views, rowIndex) => {
+    const cellAddr = XLSX.utils.encode_cell({ r: rowIndex, c: viewsColumnIndex });
+    const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
+    const isNumber = !isNaN(numericViews);
+    
+    // Preserve existing cell styles if present, just update value
+    if (worksheet[cellAddr]) {
+      worksheet[cellAddr].v = isNumber ? numericViews : views;
+      worksheet[cellAddr].t = isNumber ? 'n' : 's';
+    } else {
+      worksheet[cellAddr] = { 
+        t: isNumber ? 'n' : 's', 
+        v: isNumber ? numericViews : views 
+      };
     }
-
-    const views = viewsMap.get(index);
-    if (views !== undefined) {
-      const newRow = [...row];
-      newRow[viewsColumnIndex] = String(views);
-      return newRow;
-    }
-
-    return row;
   });
 
-  // Create new worksheet from updated data
-  const newWorksheet = XLSX.utils.aoa_to_sheet(updatedData);
-  workbook.Sheets[sheetName] = newWorksheet;
+  // Ensure the worksheet range includes the views column
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+  if (viewsColumnIndex > range.e.c) {
+    range.e.c = viewsColumnIndex;
+    worksheet['!ref'] = XLSX.utils.encode_range(range);
+  }
 
-  // Write to buffer
+  // Write to buffer - preserves all formatting
   const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
   return new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
