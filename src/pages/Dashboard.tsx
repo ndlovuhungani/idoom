@@ -69,14 +69,14 @@ export default function Dashboard() {
 
       // Process based on mode
       const apiMode = settings?.api_mode || 'demo';
-      const viewsMap = new Map<number, number | string>();
+      const viewsMap = new Map<string, number | string>();
 
       if (apiMode === 'demo') {
         // Demo mode - generate fake views with realistic delays
         for (let i = 0; i < excelData.instagramLinks.length; i++) {
           const link = excelData.instagramLinks[i];
           const views = generateDemoViews();
-          viewsMap.set(link.row, views);
+          viewsMap.set(link.url, views);
 
           // Update progress
           await updateJob.mutateAsync({
@@ -93,7 +93,7 @@ export default function Dashboard() {
           const link = excelData.instagramLinks[i];
           // For now, use demo data until APIs are configured
           const views = generateDemoViews();
-          viewsMap.set(link.row, views);
+          viewsMap.set(link.url, views);
 
           await updateJob.mutateAsync({
             id: job.id,

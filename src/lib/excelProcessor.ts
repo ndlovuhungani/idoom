@@ -1,22 +1,29 @@
 import ExcelJS from 'exceljs';
 
+export type FileFormat = 'vertical' | 'horizontal' | 'alternating';
+
+export interface LinkInfo {
+  row: number;       // 1-indexed row
+  col: number;       // 1-indexed column  
+  url: string;
+  viewsRow: number;  // Where to write the views (row)
+  viewsCol: number;  // Where to write the views (column)
+}
+
 export interface ExcelData {
   workbook: ExcelJS.Workbook;
   sheetName: string;
-  linkColumnIndex: number;
-  viewsColumnIndex: number;
-  instagramLinks: Array<{ row: number; url: string }>;
+  format: FileFormat;
+  instagramLinks: LinkInfo[];
 }
 
-// Instagram URL patterns - flexible to match various formats
+// Instagram URL patterns
 const INSTAGRAM_URL_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i;
-
-// Fallback pattern for any instagram.com URL
 const INSTAGRAM_DOMAIN_PATTERN = /(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)/i;
 
 export function isInstagramUrl(url: string): boolean {
   if (!url || typeof url !== 'string') return false;
-  const trimmed = url.trim().replace(/^["']|["']$/g, ''); // Remove quotes and whitespace
+  const trimmed = url.trim().replace(/^["']|["']$/g, '');
   return INSTAGRAM_URL_PATTERN.test(trimmed) || INSTAGRAM_DOMAIN_PATTERN.test(trimmed);
 }
 
@@ -27,132 +34,145 @@ export function extractInstagramId(url: string): string | null {
   return match ? match[1] : null;
 }
 
+function getCellValue(cell: ExcelJS.Cell): string {
+  if (!cell || !cell.value) return '';
+  
+  // Handle hyperlinks
+  if (typeof cell.value === 'object' && 'hyperlink' in cell.value) {
+    return String(cell.value.hyperlink || cell.value.text || '');
+  }
+  
+  // Handle rich text
+  if (typeof cell.value === 'object' && 'richText' in cell.value) {
+    return cell.value.richText.map((rt: any) => rt.text).join('');
+  }
+  
+  return String(cell.value);
+}
+
+function isViewsHeader(value: string): boolean {
+  const lower = value.toLowerCase().trim();
+  return lower.includes('view') || lower.includes('og view') || lower === 'views';
+}
+
 export async function parseExcelFile(file: File): Promise<ExcelData> {
   const workbook = new ExcelJS.Workbook();
   const arrayBuffer = await file.arrayBuffer();
   await workbook.xlsx.load(arrayBuffer);
 
-  // Get first sheet
   const worksheet = workbook.worksheets[0];
   if (!worksheet) {
     throw new Error('No worksheets found in the Excel file');
   }
   const sheetName = worksheet.name;
 
-  // Convert worksheet to 2D array for scanning
-  const data: string[][] = [];
-  worksheet.eachRow({ includeEmpty: true }, (row, rowNumber) => {
-    const rowData: string[] = [];
-    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-      // Pad array if there are gaps
-      while (rowData.length < colNumber - 1) {
-        rowData.push('');
+  // Scan the entire sheet to find Instagram links and detect format
+  const instagramLinks: LinkInfo[] = [];
+  const linkColumnCounts: Map<number, number> = new Map();
+  let existingViewsColumns: Map<number, number> = new Map(); // linkCol -> viewsCol
+
+  // First pass: Find all Instagram links and their positions
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      const value = getCellValue(cell);
+      if (isInstagramUrl(value)) {
+        linkColumnCounts.set(colNumber, (linkColumnCounts.get(colNumber) || 0) + 1);
+        instagramLinks.push({
+          row: rowNumber,
+          col: colNumber,
+          url: value.trim().replace(/^["']|["']$/g, ''),
+          viewsRow: rowNumber,
+          viewsCol: colNumber + 1, // Default: next column
+        });
       }
-      rowData[colNumber - 1] = String(cell.value || '');
     });
-    // Pad to match rowNumber (1-indexed)
-    while (data.length < rowNumber - 1) {
-      data.push([]);
-    }
-    data[rowNumber - 1] = rowData;
   });
 
-  // Auto-detect Instagram link column
-  let linkColumnIndex = -1;
-  let viewsColumnIndex = -1;
-
-  // Check header row first (row 0 in our array)
-  if (data.length > 0) {
-    const headerRow = data[0].map((cell) => String(cell).toLowerCase().trim());
-
-    // Look for link/url column with flexible matching
-    linkColumnIndex = headerRow.findIndex(
-      (h) => h.includes('link') || h.includes('url') || h.includes('instagram') || h.includes('reel') || h.includes('post')
-    );
-
-    // Look for views column
-    viewsColumnIndex = headerRow.findIndex(
-      (h) => h.includes('view') || h.includes('count')
-    );
+  if (instagramLinks.length === 0) {
+    throw new Error('Could not find any Instagram URLs in the file');
   }
 
-  // If no header match, scan all columns for Instagram URLs
-  if (linkColumnIndex === -1) {
-    for (let col = 0; col < (data[0]?.length || 0); col++) {
-      for (let row = 0; row < Math.min(data.length, 20); row++) {
-        const cellValue = String(data[row]?.[col] || '').trim().replace(/^["']|["']$/g, '');
-        if (isInstagramUrl(cellValue)) {
-          linkColumnIndex = col;
-          console.log('Found Instagram URL in column', col, 'row', row, ':', cellValue);
-          break;
+  // Detect format based on link distribution
+  const uniqueLinkCols = Array.from(linkColumnCounts.keys()).sort((a, b) => a - b);
+  let format: FileFormat = 'vertical';
+
+  // Check for alternating pattern (Link | Views | Link | Views)
+  if (uniqueLinkCols.length >= 2) {
+    const gaps = [];
+    for (let i = 1; i < uniqueLinkCols.length; i++) {
+      gaps.push(uniqueLinkCols[i] - uniqueLinkCols[i - 1]);
+    }
+    // If all gaps are 2, it's alternating (col 1, 3, 5...)
+    if (gaps.every(g => g === 2)) {
+      format = 'alternating';
+    } else if (uniqueLinkCols.length > 1) {
+      format = 'horizontal';
+    }
+  }
+
+  // Second pass: Find existing views columns by checking headers
+  const headerRow = worksheet.getRow(1);
+  headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    const value = getCellValue(cell);
+    if (isViewsHeader(value)) {
+      // Find which link column this views column belongs to
+      // It's typically right after a link column or has a corresponding header
+      for (const linkCol of uniqueLinkCols) {
+        if (colNumber === linkCol + 1) {
+          existingViewsColumns.set(linkCol, colNumber);
         }
       }
-      if (linkColumnIndex !== -1) break;
+      // If no direct match, check if it's a general views column
+      if (existingViewsColumns.size === 0 && uniqueLinkCols.length === 1) {
+        existingViewsColumns.set(uniqueLinkCols[0], colNumber);
+      }
+    }
+  });
+
+  // Update viewsCol for each link based on detected format and existing columns
+  for (const link of instagramLinks) {
+    // Check if there's an existing views column for this link's column
+    if (existingViewsColumns.has(link.col)) {
+      link.viewsCol = existingViewsColumns.get(link.col)!;
+    } else {
+      // Default: column immediately after the link
+      link.viewsCol = link.col + 1;
     }
   }
 
-  // If views column not found, use the column right after links
-  if (viewsColumnIndex === -1 && linkColumnIndex !== -1) {
-    viewsColumnIndex = linkColumnIndex + 1;
-  }
-
-  if (linkColumnIndex === -1) {
-    throw new Error('Could not find a column with Instagram URLs');
-  }
-
-  // Extract all Instagram links with their row numbers (1-indexed for ExcelJS)
-  const instagramLinks: Array<{ row: number; url: string }> = [];
-  for (let row = 1; row < data.length; row++) {
-    const rawValue = data[row]?.[linkColumnIndex];
-    const cellValue = String(rawValue || '').trim().replace(/^["']|["']$/g, '');
-    if (cellValue && isInstagramUrl(cellValue)) {
-      // Store as 1-indexed row number for ExcelJS compatibility
-      instagramLinks.push({ row: row + 1, url: cellValue });
-    }
-  }
-
-  console.log('Total rows:', data.length, 'Instagram links found:', instagramLinks.length);
-  if (instagramLinks.length === 0) {
-    console.log('Sample data from link column:', data.slice(0, 5).map(r => r?.[linkColumnIndex]));
-  }
+  console.log('Detected format:', format);
+  console.log('Link columns:', uniqueLinkCols);
+  console.log('Views columns:', Object.fromEntries(existingViewsColumns));
+  console.log('Total Instagram links found:', instagramLinks.length);
 
   return {
     workbook,
     sheetName,
-    linkColumnIndex,
-    viewsColumnIndex,
+    format,
     instagramLinks,
   };
 }
 
 export async function updateExcelWithViews(
   excelData: ExcelData,
-  viewsMap: Map<number, number | string>
+  viewsMap: Map<string, number | string> // Map of URL -> views
 ): Promise<Blob> {
-  const { workbook, sheetName, viewsColumnIndex } = excelData;
+  const { workbook, sheetName, instagramLinks } = excelData;
 
-  // Get the original worksheet - preserves all formatting
   const worksheet = workbook.getWorksheet(sheetName);
   if (!worksheet) {
     throw new Error('Worksheet not found');
   }
 
-  // ExcelJS uses 1-based indexing
-  const viewsCol = viewsColumnIndex + 1;
-
-  // Update header if views column doesn't have a header
-  const headerCell = worksheet.getCell(1, viewsCol);
-  if (!headerCell.value) {
-    headerCell.value = 'Views';
+  // Update views for each link at its designated position
+  for (const link of instagramLinks) {
+    const views = viewsMap.get(link.url);
+    if (views !== undefined) {
+      const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
+      const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
+      cell.value = isNaN(numericViews) ? views : numericViews;
+    }
   }
-
-  // Update only the cells that need views data - formatting is automatically preserved
-  viewsMap.forEach((views, rowIndex) => {
-    // rowIndex is already 1-indexed from parseExcelFile
-    const cell = worksheet.getCell(rowIndex, viewsCol);
-    const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
-    cell.value = isNaN(numericViews) ? views : numericViews;
-  });
 
   // Write to buffer - preserves all original formatting
   const buffer = await workbook.xlsx.writeBuffer();
@@ -162,7 +182,6 @@ export async function updateExcelWithViews(
 }
 
 export function generateDemoViews(): number {
-  // Generate realistic-looking view counts
   const ranges = [
     { min: 1000, max: 10000, weight: 0.4 },
     { min: 10000, max: 100000, weight: 0.35 },
