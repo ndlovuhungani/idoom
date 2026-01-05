@@ -170,19 +170,18 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
     }
   } else {
     // Vertical or Alternating: views go in column AFTER the link, same row
-    // Find existing views columns by checking headers
+    // Find existing views columns by checking headers (only if header is adjacent to link column)
     const headerRow = worksheet.getRow(1);
     headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
       const value = getCellValue(cell);
       if (isViewsHeader(value)) {
         for (const linkCol of uniqueLinkCols) {
+          // Only map if views header is exactly at linkCol + 1 (adjacent)
           if (colNumber === linkCol + 1) {
             existingViewsColumns.set(linkCol, colNumber);
           }
         }
-        if (existingViewsColumns.size === 0 && uniqueLinkCols.length === 1) {
-          existingViewsColumns.set(uniqueLinkCols[0], colNumber);
-        }
+        // REMOVED: Unsafe fallback that could map views to wrong column
       }
     });
 
@@ -190,12 +189,27 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
     for (const link of instagramLinks) {
       link.viewsRow = link.row; // Same row
       link.viewsCol = existingViewsColumns.get(link.col) || link.col + 1;
+      
+      // SAFETY: viewsCol must NEVER be the same as linkCol (would overwrite link)
+      if (link.viewsCol === link.col) {
+        link.viewsCol = link.col + 1;
+      }
     }
   }
 
   console.log('Detected format:', format);
   console.log('Links per row:', Array.from(linksPerRow.entries()).map(([row, links]) => `Row ${row}: ${links.length} links`));
   console.log('Total Instagram links found:', instagramLinks.length);
+  
+  // Debug: log sample mapping
+  if (instagramLinks.length > 0) {
+    console.log('Sample link mapping:', {
+      linkRow: instagramLinks[0].row,
+      linkCol: instagramLinks[0].col,
+      viewsRow: instagramLinks[0].viewsRow,
+      viewsCol: instagramLinks[0].viewsCol,
+    });
+  }
 
   return {
     workbook,
