@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Eye, Loader2 } from 'lucide-react';
+import { Eye, Loader2, Shield, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
@@ -19,6 +20,9 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isBootstrapping, setIsBootstrapping] = useState(false);
+  const [showBootstrap, setShowBootstrap] = useState(false);
+  const [bootstrapSuccess, setBootstrapSuccess] = useState(false);
   const { signIn } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -54,6 +58,40 @@ export default function Login() {
     }
   };
 
+  const handleBootstrap = async () => {
+    const result = loginSchema.safeParse({ email, password });
+    if (!result.success) {
+      toast.error(result.error.errors[0].message);
+      return;
+    }
+
+    setIsBootstrapping(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('bootstrap-admin', {
+        body: { email, password },
+      });
+
+      if (error) {
+        toast.error(error.message);
+        return;
+      }
+
+      if (data?.success) {
+        setBootstrapSuccess(true);
+        toast.success('Admin created! You can now log in.');
+        setShowBootstrap(false);
+      } else {
+        toast.error(data?.error || 'Failed to create admin');
+      }
+    } catch (err) {
+      console.error('Bootstrap error:', err);
+      toast.error('Failed to create admin user');
+    } finally {
+      setIsBootstrapping(false);
+    }
+  };
+
   return (
     <div className="min-h-screen gradient-hero flex items-center justify-center p-4">
       <motion.div
@@ -83,13 +121,28 @@ export default function Login() {
         {/* Login Card */}
         <Card className="border-0 shadow-lg">
           <CardHeader className="space-y-1 pb-4">
-            <CardTitle className="text-2xl font-display">Welcome back</CardTitle>
+            <CardTitle className="text-2xl font-display">
+              {showBootstrap ? 'Create Admin Account' : 'Welcome back'}
+            </CardTitle>
             <CardDescription>
-              Sign in to your account to continue
+              {showBootstrap
+                ? 'Set up your first admin account'
+                : 'Sign in to your account to continue'}
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            {bootstrapSuccess && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="mb-4 p-3 bg-success/10 border border-success/20 rounded-lg flex items-center gap-2 text-sm text-success"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Admin account created! Sign in below.
+              </motion.div>
+            )}
+
+            <form onSubmit={showBootstrap ? (e) => { e.preventDefault(); handleBootstrap(); } : handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input
@@ -114,7 +167,7 @@ export default function Login() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
-                    autoComplete="current-password"
+                    autoComplete={showBootstrap ? 'new-password' : 'current-password'}
                     className="h-11 pr-10"
                   />
                   <button
@@ -127,27 +180,76 @@ export default function Login() {
                 </div>
               </div>
 
-              <Button
-                type="submit"
-                className="w-full h-11 gradient-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity"
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Signing in...
-                  </>
-                ) : (
-                  'Sign in'
-                )}
-              </Button>
+              {showBootstrap ? (
+                <div className="space-y-3">
+                  <Button
+                    type="submit"
+                    className="w-full h-11 gradient-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity"
+                    disabled={isBootstrapping}
+                  >
+                    {isBootstrapping ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating Admin...
+                      </>
+                    ) : (
+                      <>
+                        <Shield className="mr-2 h-4 w-4" />
+                        Create Admin Account
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-full"
+                    onClick={() => setShowBootstrap(false)}
+                  >
+                    Back to Sign In
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="submit"
+                  className="w-full h-11 gradient-primary text-primary-foreground font-medium hover:opacity-90 transition-opacity"
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Signing in...
+                    </>
+                  ) : (
+                    'Sign in'
+                  )}
+                </Button>
+              )}
             </form>
           </CardContent>
         </Card>
 
-        <p className="text-center text-sm text-muted-foreground mt-6">
-          Contact your administrator for account access
-        </p>
+        {!showBootstrap && !bootstrapSuccess && (
+          <div className="text-center mt-6">
+            <p className="text-sm text-muted-foreground mb-2">
+              First time setup?
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowBootstrap(true)}
+              className="gap-2"
+            >
+              <Shield className="w-4 h-4" />
+              Create First Admin
+            </Button>
+          </div>
+        )}
+
+        {!showBootstrap && bootstrapSuccess && (
+          <p className="text-center text-sm text-muted-foreground mt-6">
+            Contact your administrator for account access
+          </p>
+        )}
       </motion.div>
     </div>
   );
