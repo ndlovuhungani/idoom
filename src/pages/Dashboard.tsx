@@ -41,6 +41,19 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Retry helper with exponential backoff
+  const updateWithRetry = async (jobId: string, updates: Record<string, unknown>, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        await updateJob.mutateAsync({ id: jobId, ...updates });
+        return;
+      } catch (error) {
+        if (i === retries - 1) throw error;
+        await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+      }
+    }
+  };
+
   const handleProcess = async () => {
     if (!currentFile || !excelData) {
       toast.error('Please upload a file first');
@@ -53,23 +66,22 @@ export default function Dashboard() {
     }
 
     setIsProcessing(true);
+    let job: { id: string } | null = null;
 
     try {
       // Create job in database
-      const job = await createJob.mutateAsync({
+      job = await createJob.mutateAsync({
         fileName: currentFile.name,
         totalLinks: excelData.instagramLinks.length,
       });
 
       // Update status to processing
-      await updateJob.mutateAsync({
-        id: job.id,
-        status: 'processing',
-      });
+      await updateWithRetry(job.id, { status: 'processing' });
 
       // Process based on mode
       const apiMode = settings?.api_mode || 'demo';
       const viewsMap = new Map<string, number | string>();
+      const batchSize = 10; // Update progress every 10 links
 
       if (apiMode === 'demo') {
         // Demo mode - generate fake views with realistic delays
@@ -78,11 +90,10 @@ export default function Dashboard() {
           const views = generateDemoViews();
           viewsMap.set(link.url, views);
 
-          // Update progress
-          await updateJob.mutateAsync({
-            id: job.id,
-            processed_links: i + 1,
-          });
+          // Batch progress updates (every 10 links or last link)
+          if ((i + 1) % batchSize === 0 || i === excelData.instagramLinks.length - 1) {
+            await updateWithRetry(job.id, { processed_links: i + 1 });
+          }
 
           // Small delay to simulate API calls
           await new Promise((resolve) => setTimeout(resolve, 50));
@@ -95,10 +106,10 @@ export default function Dashboard() {
           const views = generateDemoViews();
           viewsMap.set(link.url, views);
 
-          await updateJob.mutateAsync({
-            id: job.id,
-            processed_links: i + 1,
-          });
+          // Batch progress updates
+          if ((i + 1) % batchSize === 0 || i === excelData.instagramLinks.length - 1) {
+            await updateWithRetry(job.id, { processed_links: i + 1 });
+          }
 
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
@@ -111,8 +122,7 @@ export default function Dashboard() {
       const downloadUrl = URL.createObjectURL(updatedBlob);
 
       // Mark job as completed
-      await updateJob.mutateAsync({
-        id: job.id,
+      await updateWithRetry(job.id, {
         status: 'completed',
         result_file_url: downloadUrl,
         completed_at: new Date().toISOString(),
@@ -123,6 +133,18 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Processing error:', error);
       toast.error('Failed to process file');
+
+      // Mark job as failed in database
+      if (job?.id) {
+        try {
+          await updateWithRetry(job.id, {
+            status: 'failed',
+            error_message: error instanceof Error ? error.message : 'Unknown error occurred',
+          });
+        } catch {
+          // Silently fail if we can't update the job
+        }
+      }
     } finally {
       setIsProcessing(false);
       setCurrentFile(null);

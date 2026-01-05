@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format } from 'date-fns';
@@ -9,20 +9,24 @@ import {
   XCircle,
   Loader2,
   FileSpreadsheet,
+  RotateCcw,
 } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { useProcessingJobs } from '@/hooks/useProcessingJobs';
+import { useProcessingJobs, useUpdateJob } from '@/hooks/useProcessingJobs';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export default function ProcessingStatus() {
   const { jobId } = useParams();
   const navigate = useNavigate();
+  const [isResetting, setIsResetting] = useState(false);
 
   const { data: jobs } = useProcessingJobs();
+  const updateJob = useUpdateJob();
   const job = jobs?.find((j) => j.id === jobId);
 
   const progress = job ? Math.round((job.processed_links / job.total_links) * 100) : 0;
@@ -33,6 +37,24 @@ export default function ProcessingStatus() {
       link.href = job.result_file_url;
       link.download = `processed_${job.file_name}`;
       link.click();
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!job) return;
+    setIsResetting(true);
+    try {
+      await updateJob.mutateAsync({
+        id: job.id,
+        status: 'failed',
+        error_message: 'Job cancelled by user',
+      });
+      toast.success('Job marked as failed. You can upload the file again.');
+      navigate('/dashboard');
+    } catch (error) {
+      toast.error('Failed to reset job');
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -134,6 +156,15 @@ export default function ProcessingStatus() {
               {job.status === 'failed' && job.error_message && (
                 <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
                   <p className="text-sm text-destructive">{job.error_message}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => navigate('/dashboard')}
+                  >
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Try Again with New Upload
+                  </Button>
                 </div>
               )}
 
@@ -162,11 +193,27 @@ export default function ProcessingStatus() {
 
               {/* Processing Animation */}
               {job.status === 'processing' && (
-                <div className="flex items-center justify-center py-4">
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Processing links...</span>
+                <div className="space-y-4 py-4">
+                  <div className="flex items-center justify-center">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Processing links...</span>
+                    </div>
                   </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
+                    onClick={handleRetry}
+                    disabled={isResetting}
+                  >
+                    {isResetting ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <XCircle className="w-4 h-4 mr-2" />
+                    )}
+                    Cancel Processing
+                  </Button>
                 </div>
               )}
             </div>
