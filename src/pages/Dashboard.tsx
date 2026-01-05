@@ -104,8 +104,8 @@ export default function Dashboard() {
         }
       }
 
-      // Generate updated Excel file
-      const updatedBlob = updateExcelWithViews(excelData, viewsMap);
+      // Generate updated Excel file (async to preserve formatting)
+      const updatedBlob = await updateExcelWithViews(excelData, viewsMap);
 
       // Create download URL
       const downloadUrl = URL.createObjectURL(updatedBlob);
