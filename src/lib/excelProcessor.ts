@@ -101,7 +101,7 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
     linksPerRow.get(link.row)!.push(link);
   }
 
-  // Detect format: If any row has multiple links, it's horizontal format
+  // Detect format: If any row has multiple links, check if it's alternating or horizontal-below
   const hasMultipleLinksPerRow = Array.from(linksPerRow.values()).some(
     links => links.length > 1
   );
@@ -109,26 +109,68 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
   const uniqueLinkCols = Array.from(linkColumnCounts.keys()).sort((a, b) => a - b);
   let format: FileFormat = 'vertical';
 
-  if (hasMultipleLinksPerRow) {
-    // Horizontal format: views go in row BELOW the link, same column
-    format = 'horizontal';
-    for (const link of instagramLinks) {
-      link.viewsRow = link.row + 1;
-      link.viewsCol = link.col; // Same column as the link
+  // Check for alternating pattern FIRST (Link | Views | Link | Views)
+  // This takes priority even when there are multiple links per row
+  if (uniqueLinkCols.length >= 2) {
+    const gaps = [];
+    for (let i = 1; i < uniqueLinkCols.length; i++) {
+      gaps.push(uniqueLinkCols[i] - uniqueLinkCols[i - 1]);
     }
-  } else {
-    // Check for alternating pattern (Link | Views | Link | Views)
-    if (uniqueLinkCols.length >= 2) {
-      const gaps = [];
-      for (let i = 1; i < uniqueLinkCols.length; i++) {
-        gaps.push(uniqueLinkCols[i] - uniqueLinkCols[i - 1]);
-      }
-      if (gaps.every(g => g === 2)) {
-        format = 'alternating';
+    // If all gaps are 2, it's alternating (col 1, 3, 5... or col 2, 4, 6...)
+    if (gaps.every(g => g === 2)) {
+      format = 'alternating';
+    }
+  }
+
+  // If not alternating, check for horizontal format using majority-vote heuristic
+  if (format !== 'alternating' && hasMultipleLinksPerRow) {
+    // Sample links to determine if views go RIGHT or BELOW
+    let preferRight = 0;
+    let preferBelow = 0;
+
+    for (const link of instagramLinks) {
+      const rightCell = worksheet.getCell(link.row, link.col + 1);
+      const belowCell = worksheet.getCell(link.row + 1, link.col);
+      const rightValue = getCellValue(rightCell);
+      const belowValue = getCellValue(belowCell);
+
+      // Check if right cell is empty or numeric (likely views placeholder)
+      const rightIsEmpty = !rightValue || rightValue.trim() === '';
+      const rightIsNumeric = !isNaN(Number(rightValue));
+      
+      // Check if below cell is empty
+      const belowIsEmpty = !belowValue || belowValue.trim() === '';
+
+      // Prefer RIGHT if right cell is empty/numeric AND below is NOT empty
+      // Prefer BELOW if below cell is empty AND right is NOT empty
+      if ((rightIsEmpty || rightIsNumeric) && !belowIsEmpty) {
+        preferRight++;
+      } else if (belowIsEmpty && !rightIsEmpty && !rightIsNumeric) {
+        preferBelow++;
+      } else if (rightIsEmpty && belowIsEmpty) {
+        // Both empty - default to right (same row)
+        preferRight++;
       }
     }
 
-    // For vertical/alternating: Find existing views columns by checking headers
+    console.log('Placement vote:', { preferRight, preferBelow });
+
+    // Use majority vote - if more prefer below, use horizontal format
+    if (preferBelow > preferRight) {
+      format = 'horizontal';
+    }
+  }
+
+  // Apply placement rules based on detected format
+  if (format === 'horizontal') {
+    // Horizontal format: views go in row BELOW the link, same column
+    for (const link of instagramLinks) {
+      link.viewsRow = link.row + 1;
+      link.viewsCol = link.col;
+    }
+  } else {
+    // Vertical or Alternating: views go in column AFTER the link, same row
+    // Find existing views columns by checking headers
     const headerRow = worksheet.getRow(1);
     headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
       const value = getCellValue(cell);
