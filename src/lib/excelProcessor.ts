@@ -134,22 +134,40 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
       const rightValue = getCellValue(rightCell);
       const belowValue = getCellValue(belowCell);
 
+      // CRITICAL: If below cell contains an Instagram URL, views CANNOT go below
+      if (isInstagramUrl(belowValue)) {
+        preferRight++;
+        continue;
+      }
+      // CRITICAL: If right cell contains an Instagram URL, views CANNOT go right
+      if (isInstagramUrl(rightValue)) {
+        preferBelow++;
+        continue;
+      }
+
       // Check if right cell is empty or numeric (likely views placeholder)
       const rightIsEmpty = !rightValue || rightValue.trim() === '';
       const rightIsNumeric = !isNaN(Number(rightValue));
       
-      // Check if below cell is empty
+      // Check if below cell is empty or numeric
       const belowIsEmpty = !belowValue || belowValue.trim() === '';
+      const belowIsNumeric = !isNaN(Number(belowValue));
 
-      // Prefer RIGHT if right cell is empty/numeric AND below is NOT empty
-      // Prefer BELOW if below cell is empty AND right is NOT empty
-      if ((rightIsEmpty || rightIsNumeric) && !belowIsEmpty) {
+      // Prefer RIGHT if right cell is empty/numeric AND below is NOT empty/numeric
+      // Prefer BELOW if below cell is empty/numeric AND right is NOT empty/numeric
+      if ((rightIsEmpty || rightIsNumeric) && !belowIsEmpty && !belowIsNumeric) {
         preferRight++;
-      } else if (belowIsEmpty && !rightIsEmpty && !rightIsNumeric) {
+      } else if ((belowIsEmpty || belowIsNumeric) && !rightIsEmpty && !rightIsNumeric) {
         preferBelow++;
       } else if (rightIsEmpty && belowIsEmpty) {
         // Both empty - default to right (same row)
         preferRight++;
+      } else if (rightIsNumeric && !belowIsNumeric) {
+        // Right has existing numbers (views), prefer right
+        preferRight++;
+      } else if (belowIsNumeric && !rightIsNumeric) {
+        // Below has existing numbers (views), prefer below
+        preferBelow++;
       }
     }
 
@@ -181,7 +199,6 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
             existingViewsColumns.set(linkCol, colNumber);
           }
         }
-        // REMOVED: Unsafe fallback that could map views to wrong column
       }
     });
 
@@ -193,6 +210,36 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
       // SAFETY: viewsCol must NEVER be the same as linkCol (would overwrite link)
       if (link.viewsCol === link.col) {
         link.viewsCol = link.col + 1;
+      }
+    }
+  }
+
+  // POST-PROCESSING VALIDATION: Ensure no target cell contains an Instagram URL
+  for (const link of instagramLinks) {
+    const targetCell = worksheet.getCell(link.viewsRow, link.viewsCol);
+    const targetValue = getCellValue(targetCell);
+    
+    if (isInstagramUrl(targetValue)) {
+      console.warn(`Target cell (${link.viewsRow}, ${link.viewsCol}) contains Instagram URL, finding safer alternative`);
+      
+      // Try alternative placements: right first, then below
+      const rightCell = worksheet.getCell(link.row, link.col + 1);
+      const rightValue = getCellValue(rightCell);
+      
+      if (!isInstagramUrl(rightValue) && link.col + 1 !== link.col) {
+        link.viewsRow = link.row;
+        link.viewsCol = link.col + 1;
+      } else {
+        const belowCell = worksheet.getCell(link.row + 1, link.col);
+        const belowValue = getCellValue(belowCell);
+        
+        if (!isInstagramUrl(belowValue)) {
+          link.viewsRow = link.row + 1;
+          link.viewsCol = link.col;
+        } else {
+          // Mark as invalid - will be skipped during write
+          console.warn(`No safe cell found for link at (${link.row}, ${link.col})`);
+        }
       }
     }
   }
@@ -219,6 +266,44 @@ export async function parseExcelFile(file: File): Promise<ExcelData> {
   };
 }
 
+// Find a safe cell to write views (not a link cell)
+function findSafeViewsCell(
+  worksheet: ExcelJS.Worksheet,
+  link: LinkInfo
+): { row: number; col: number } | null {
+  // Candidate cells in priority order
+  const candidates = [
+    { row: link.viewsRow, col: link.viewsCol },  // Preferred from mapping
+    { row: link.row, col: link.col + 1 },        // Right of link
+    { row: link.row + 1, col: link.col },        // Below link
+  ];
+
+  for (const candidate of candidates) {
+    // Never write to the link cell itself
+    if (candidate.row === link.row && candidate.col === link.col) {
+      continue;
+    }
+
+    const cell = worksheet.getCell(candidate.row, candidate.col);
+    const value = getCellValue(cell);
+
+    // Skip if this cell contains an Instagram URL
+    if (isInstagramUrl(value)) {
+      continue;
+    }
+
+    // Safe cell: empty, numeric, or non-Instagram text
+    const isEmpty = !value || value.trim() === '';
+    const isNumeric = !isEmpty && !isNaN(Number(value));
+    
+    if (isEmpty || isNumeric) {
+      return candidate;
+    }
+  }
+
+  return null; // No safe cell found
+}
+
 export async function updateExcelWithViews(
   excelData: ExcelData,
   viewsMap: Map<string, number | string> // Map of URL -> views
@@ -230,15 +315,39 @@ export async function updateExcelWithViews(
     throw new Error('Worksheet not found');
   }
 
+  let writtenCount = 0;
+  let skippedCount = 0;
+
   // Update views for each link at its designated position
   for (const link of instagramLinks) {
     const views = viewsMap.get(link.url);
-    if (views !== undefined) {
-      const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
-      const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
-      cell.value = isNaN(numericViews) ? views : numericViews;
+    if (views === undefined) continue;
+
+    // Find a safe cell that won't overwrite links
+    const safeCell = findSafeViewsCell(worksheet, link);
+    
+    if (!safeCell) {
+      console.warn(`Skipped write for link at (${link.row}, ${link.col}): no safe cell found`);
+      skippedCount++;
+      continue;
     }
+
+    const cell = worksheet.getCell(safeCell.row, safeCell.col);
+    const originalValue = getCellValue(cell);
+    
+    // Double-check: NEVER overwrite an Instagram URL
+    if (isInstagramUrl(originalValue)) {
+      console.warn(`BLOCKED overwrite of Instagram link at (${safeCell.row}, ${safeCell.col})`);
+      skippedCount++;
+      continue;
+    }
+
+    const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
+    cell.value = isNaN(numericViews) ? views : numericViews;
+    writtenCount++;
   }
+
+  console.log(`Views written: ${writtenCount}, skipped: ${skippedCount}`);
 
   // Write to buffer - preserves all original formatting
   const buffer = await workbook.xlsx.writeBuffer();
