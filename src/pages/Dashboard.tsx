@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { useProcessingJobs, useCreateJob, useUpdateJob } from '@/hooks/useProcessingJobs';
 import { useAppSettings } from '@/hooks/useAppSettings';
 import { parseExcelFile, updateExcelWithViews, generateDemoViews, ExcelData } from '@/lib/excelProcessor';
+import { fetchInstagramViewsBatched } from '@/lib/api/instagram';
 import { toast } from 'sonner';
 
 export default function Dashboard() {
@@ -98,15 +99,35 @@ export default function Dashboard() {
           // Small delay to simulate API calls
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
+      } else if (apiMode === 'apify') {
+        // Apify mode - use real API
+        const urls = excelData.instagramLinks.map((link) => link.url);
+        
+        try {
+          const apifyViews = await fetchInstagramViewsBatched(
+            urls,
+            batchSize,
+            async (processed) => {
+              await updateWithRetry(job.id, { processed_links: processed });
+            }
+          );
+          
+          apifyViews.forEach((value, key) => viewsMap.set(key, value));
+        } catch (error) {
+          console.error('Apify API error:', error);
+          toast.error('Apify API error - falling back to demo mode');
+          // Fallback to demo mode
+          for (const link of excelData.instagramLinks) {
+            viewsMap.set(link.url, generateDemoViews());
+          }
+        }
       } else {
-        // Real API mode - TODO: Implement Apify/Hiker integration
+        // Hiker mode or other - TODO: implement
         for (let i = 0; i < excelData.instagramLinks.length; i++) {
           const link = excelData.instagramLinks[i];
-          // For now, use demo data until APIs are configured
           const views = generateDemoViews();
           viewsMap.set(link.url, views);
 
-          // Batch progress updates
           if ((i + 1) % batchSize === 0 || i === excelData.instagramLinks.length - 1) {
             await updateWithRetry(job.id, { processed_links: i + 1 });
           }
