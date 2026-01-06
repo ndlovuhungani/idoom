@@ -14,12 +14,22 @@ export default function FileUpload({ onFileSelect, isProcessing }: FileUploadPro
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Max file size: 10MB
+  const MAX_FILE_SIZE = 10 * 1024 * 1024;
+
   const onDrop = useCallback(
     (acceptedFiles: File[], rejectedFiles: any[]) => {
       setError(null);
 
       if (rejectedFiles.length > 0) {
-        setError('Please upload an Excel file (.xlsx or .xls)');
+        const rejection = rejectedFiles[0];
+        if (rejection.errors?.some((e: any) => e.code === 'file-too-large')) {
+          setError('File is too large. Maximum size is 10MB.');
+        } else if (rejection.errors?.some((e: any) => e.code === 'file-invalid-type')) {
+          setError('Please upload an Excel file (.xlsx or .xls)');
+        } else {
+          setError('Invalid file. Please upload an Excel file under 10MB.');
+        }
         return;
       }
 
@@ -39,6 +49,7 @@ export default function FileUpload({ onFileSelect, isProcessing }: FileUploadPro
       'application/vnd.ms-excel': ['.xls'],
     },
     maxFiles: 1,
+    maxSize: MAX_FILE_SIZE,
     disabled: isProcessing,
   });
 
@@ -93,7 +104,7 @@ export default function FileUpload({ onFileSelect, isProcessing }: FileUploadPro
                     <span className="text-primary font-medium">browse</span> to upload
                   </p>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Supports .xlsx and .xls files
+                    Supports .xlsx and .xls files (max 10MB)
                   </p>
                 </div>
               </div>
