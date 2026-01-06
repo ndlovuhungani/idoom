@@ -64,7 +64,7 @@ export default function ApiSettings() {
                 onClick={() => updateApiMode.mutate(mode.id)}
                 disabled={updateApiMode.isPending}
                 className={cn(
-                  'w-full flex items-center gap-4 p-4 border rounded-xl text-left transition-all',
+                  'w-full flex items-center gap-3 sm:gap-4 p-4 border rounded-xl text-left transition-all min-h-[72px]',
                   isActive
                     ? 'border-primary bg-primary/5 ring-1 ring-primary'
                     : 'border-border hover:border-primary/50 hover:bg-muted/50'
@@ -72,7 +72,7 @@ export default function ApiSettings() {
               >
                 <div
                   className={cn(
-                    'w-12 h-12 rounded-xl flex items-center justify-center shrink-0',
+                    'w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center shrink-0',
                     isActive ? 'bg-primary/10' : 'bg-muted'
                   )}
                 >

@@ -113,27 +113,29 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-2 mt-4 pt-4 border-t">
-        {job.status === 'processing' && (
-          <Button variant="outline" size="sm" asChild className="flex-1">
-            <Link to={`/status/${job.id}`}>
-              <ExternalLink className="w-3 h-3 mr-2" />
-              View Progress
-            </Link>
-          </Button>
-        )}
-        {job.status === 'completed' && job.result_file_url && (
-          <Button
-            variant="default"
-            size="sm"
-            className="flex-1 gradient-primary"
-            onClick={() => onDownload?.(job)}
-          >
-            <Download className="w-3 h-3 mr-2" />
-            Download
-          </Button>
-        )}
-      </div>
+      {(job.status === 'processing' || (job.status === 'completed' && job.result_file_url)) && (
+        <div className="flex flex-col sm:flex-row items-stretch gap-2 mt-4 pt-4 border-t">
+          {job.status === 'processing' && (
+            <Button variant="outline" size="sm" asChild className="flex-1 min-h-[44px]">
+              <Link to={`/status/${job.id}`}>
+                <ExternalLink className="w-4 h-4 mr-2" />
+                View Progress
+              </Link>
+            </Button>
+          )}
+          {job.status === 'completed' && job.result_file_url && (
+            <Button
+              variant="default"
+              size="sm"
+              className="flex-1 gradient-primary min-h-[44px]"
+              onClick={() => onDownload?.(job)}
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Download
+            </Button>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }
