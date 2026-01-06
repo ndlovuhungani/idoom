@@ -71,7 +71,7 @@ export default function FileUpload({ onFileSelect, isProcessing }: FileUploadPro
             <div
               {...getRootProps()}
               className={cn(
-                'relative border-2 border-dashed rounded-xl p-8 md:p-12 text-center cursor-pointer transition-all duration-200',
+                'relative border-2 border-dashed rounded-xl p-6 sm:p-8 md:p-12 text-center cursor-pointer transition-all duration-200',
                 isDragActive
                   ? 'border-primary bg-primary/5 scale-[1.02]'
                   : 'border-border hover:border-primary/50 hover:bg-muted/50',

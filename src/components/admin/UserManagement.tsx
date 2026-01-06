@@ -171,7 +171,7 @@ export default function UserManagement() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <CardTitle>User Management</CardTitle>
             <CardDescription>Create and manage user accounts</CardDescription>
@@ -264,30 +264,30 @@ export default function UserManagement() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05 }}
-                className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
+                className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 p-4 border rounded-lg hover:bg-muted/50 transition-colors"
               >
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center">
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                  <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center shrink-0">
                     {user.role === 'admin' ? (
                       <Shield className="w-5 h-5 text-primary" />
                     ) : (
                       <User className="w-5 h-5 text-muted-foreground" />
                     )}
                   </div>
-                  <div>
-                    <p className="font-medium">{user.email}</p>
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{user.email}</p>
                     <p className="text-xs text-muted-foreground">
                       Joined {format(new Date(user.created_at), 'MMM d, yyyy')}
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center justify-between sm:justify-end gap-3 pl-13 sm:pl-0">
                   <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
                     {user.role}
                   </Badge>
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive">
+                      <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-destructive min-w-[44px] min-h-[44px]">
                         <Trash2 className="w-4 h-4" />
                       </Button>
                     </AlertDialogTrigger>

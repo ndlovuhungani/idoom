@@ -114,22 +114,22 @@ export default function Analytics() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
-                  className="flex items-center justify-between p-3 border rounded-lg"
+                  className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 p-3 border rounded-lg"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center shrink-0">
                       <FileSpreadsheet className="w-4 h-4 text-secondary-foreground" />
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="font-medium truncate text-sm">{job.file_name}</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="text-xs text-muted-foreground truncate">
                         {job.user_email || 'Unknown user'} •{' '}
                         {format(new Date(job.created_at), 'MMM d, h:mm a')}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-xs text-muted-foreground">{job.total_links} links</span>
+                  <div className="flex items-center gap-2 sm:gap-3 shrink-0 pl-11 sm:pl-0">
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{job.total_links} links</span>
                     <Badge
                       variant={
                         job.status === 'completed'

@@ -92,14 +92,14 @@ export default function ProcessingStatus() {
         {/* Status Card */}
         <Card className="mb-6">
           <CardHeader>
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-secondary flex items-center justify-center">
-                  <FileSpreadsheet className="w-6 h-6 text-secondary-foreground" />
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-secondary flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-5 h-5 sm:w-6 sm:h-6 text-secondary-foreground" />
                 </div>
-                <div>
-                  <CardTitle className="text-xl">{job.file_name}</CardTitle>
-                  <p className="text-sm text-muted-foreground">
+                <div className="min-w-0">
+                  <CardTitle className="text-lg sm:text-xl truncate">{job.file_name}</CardTitle>
+                  <p className="text-xs sm:text-sm text-muted-foreground">
                     Started {format(new Date(job.created_at), 'MMM d, yyyy • h:mm a')}
                   </p>
                 </div>
@@ -137,17 +137,17 @@ export default function ProcessingStatus() {
               </div>
 
               {/* Stats Grid */}
-              <div className="grid grid-cols-3 gap-4 pt-4">
-                <div className="text-center p-3 bg-muted rounded-lg">
-                  <p className="text-2xl font-bold">{job.total_links}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 pt-4">
+                <div className="text-center p-3 sm:p-4 bg-muted rounded-lg">
+                  <p className="text-xl sm:text-2xl font-bold">{job.total_links}</p>
                   <p className="text-xs text-muted-foreground">Total Links</p>
                 </div>
-                <div className="text-center p-3 bg-success/10 rounded-lg">
-                  <p className="text-2xl font-bold text-success">{job.processed_links}</p>
+                <div className="text-center p-3 sm:p-4 bg-success/10 rounded-lg">
+                  <p className="text-xl sm:text-2xl font-bold text-success">{job.processed_links}</p>
                   <p className="text-xs text-muted-foreground">Processed</p>
                 </div>
-                <div className="text-center p-3 bg-destructive/10 rounded-lg">
-                  <p className="text-2xl font-bold text-destructive">{job.failed_links}</p>
+                <div className="text-center p-3 sm:p-4 bg-destructive/10 rounded-lg">
+                  <p className="text-xl sm:text-2xl font-bold text-destructive">{job.failed_links}</p>
                   <p className="text-xs text-muted-foreground">Failed</p>
                 </div>
               </div>
