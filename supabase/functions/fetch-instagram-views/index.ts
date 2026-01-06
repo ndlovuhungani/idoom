@@ -6,8 +6,7 @@ const corsHeaders = {
 };
 
 interface ApifyInput {
-  directUrls: string[];
-  resultsLimit: number;
+  username: string[];
 }
 
 interface ApifyResult {
@@ -24,12 +23,11 @@ interface HikerResult {
 }
 
 async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
-  const actorId = 'apify~instagram-scraper';
+  const actorId = 'apify/instagram-reel-scraper';
   const runUrl = `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apiKey}`;
 
   const input: ApifyInput = {
-    directUrls: urls,
-    resultsLimit: urls.length,
+    username: urls,
   };
 
   console.log('Calling Apify API...');
