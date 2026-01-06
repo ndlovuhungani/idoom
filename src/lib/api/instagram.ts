@@ -1,21 +1,25 @@
 import { supabase } from '@/integrations/supabase/client';
 
+export type ApiMode = 'apify' | 'hiker';
+
 export interface FetchViewsResult {
   views: Record<string, number | string>;
 }
 
 /**
- * Fetch Instagram reel view counts via the Apify edge function
+ * Fetch Instagram reel view counts via edge function
  * @param urls Array of Instagram reel URLs
+ * @param mode API mode ('apify' or 'hiker')
  * @returns Map of URL to view count (number or 'Error'/'N/A')
  */
 export async function fetchInstagramViews(
-  urls: string[]
+  urls: string[],
+  mode: ApiMode = 'apify'
 ): Promise<Map<string, number | string>> {
   const { data, error } = await supabase.functions.invoke<FetchViewsResult>(
     'fetch-instagram-views',
     {
-      body: { urls },
+      body: { urls, mode },
     }
   );
 
@@ -28,19 +32,20 @@ export async function fetchInstagramViews(
     throw new Error('Invalid response from API');
   }
 
-  // Convert object to Map
   return new Map(Object.entries(data.views));
 }
 
 /**
  * Fetch Instagram views in batches to avoid timeouts
  * @param urls Array of Instagram reel URLs
+ * @param mode API mode ('apify' or 'hiker')
  * @param batchSize Number of URLs per batch (default 10)
  * @param onProgress Callback for progress updates
  * @returns Map of URL to view count
  */
 export async function fetchInstagramViewsBatched(
   urls: string[],
+  mode: ApiMode = 'apify',
   batchSize = 10,
   onProgress?: (processed: number, total: number) => void
 ): Promise<Map<string, number | string>> {
@@ -50,11 +55,10 @@ export async function fetchInstagramViewsBatched(
     const batch = urls.slice(i, i + batchSize);
     
     try {
-      const batchViews = await fetchInstagramViews(batch);
+      const batchViews = await fetchInstagramViews(batch, mode);
       batchViews.forEach((value, key) => allViews.set(key, value));
     } catch (error) {
       console.error(`Error processing batch ${i / batchSize + 1}:`, error);
-      // Mark failed batch URLs as errors
       batch.forEach((url) => allViews.set(url, 'Error'));
     }
     

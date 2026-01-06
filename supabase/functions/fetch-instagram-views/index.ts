@@ -18,23 +18,96 @@ interface ApifyResult {
   error?: string;
 }
 
+interface HikerResult {
+  play_count?: number;
+  video_play_count?: number;
+}
+
+async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
+  const actorId = 'apify~instagram-scraper';
+  const runUrl = `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apiKey}`;
+
+  const input: ApifyInput = {
+    directUrls: urls,
+    resultsLimit: urls.length,
+  };
+
+  console.log('Calling Apify API...');
+  const response = await fetch(runUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Apify API error:', response.status, errorText);
+    throw new Error(`Apify API error: ${response.status}`);
+  }
+
+  const results: ApifyResult[] = await response.json();
+  console.log(`Received ${results.length} results from Apify`);
+
+  const viewsMap: Record<string, number | string> = {};
+  
+  for (const result of results) {
+    const url = result.inputUrl || result.url;
+    if (url) {
+      const views = result.videoPlayCount ?? result.playCount;
+      viewsMap[url] = views !== undefined && views !== null ? views : 'N/A';
+    }
+  }
+
+  for (const url of urls) {
+    if (!(url in viewsMap)) {
+      viewsMap[url] = 'Error';
+    }
+  }
+
+  return viewsMap;
+}
+
+async function fetchWithHiker(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
+  const viewsMap: Record<string, number | string> = {};
+
+  for (const url of urls) {
+    try {
+      console.log(`Fetching views for: ${url}`);
+      const response = await fetch(
+        `https://api.hikerapi.com/v2/media/by/url?url=${encodeURIComponent(url)}`,
+        {
+          headers: {
+            'accept': 'application/json',
+            'x-access-key': apiKey,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        console.error(`Hiker API error for ${url}:`, response.status);
+        viewsMap[url] = 'Error';
+        continue;
+      }
+
+      const result: HikerResult = await response.json();
+      const views = result.play_count ?? result.video_play_count;
+      viewsMap[url] = views !== undefined && views !== null ? views : 'N/A';
+    } catch (error) {
+      console.error(`Error fetching ${url}:`, error);
+      viewsMap[url] = 'Error';
+    }
+  }
+
+  return viewsMap;
+}
+
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const APIFY_API_KEY = Deno.env.get('APIFY_API_KEY');
-    if (!APIFY_API_KEY) {
-      console.error('APIFY_API_KEY is not configured');
-      return new Response(
-        JSON.stringify({ error: 'APIFY_API_KEY is not configured' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const { urls } = await req.json();
+    const { urls, mode = 'apify' } = await req.json();
     
     if (!urls || !Array.isArray(urls) || urls.length === 0) {
       return new Response(
@@ -43,59 +116,30 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing ${urls.length} Instagram URLs via Apify`);
+    console.log(`Processing ${urls.length} Instagram URLs via ${mode}`);
 
-    // Use Instagram Scraper actor - this fetches reel/post data including view counts
-    const actorId = 'apify~instagram-scraper';
-    const runUrl = `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${APIFY_API_KEY}`;
+    let viewsMap: Record<string, number | string>;
 
-    const input: ApifyInput = {
-      directUrls: urls,
-      resultsLimit: urls.length,
-    };
-
-    console.log('Calling Apify API...');
-    const response = await fetch(runUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(input),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Apify API error:', response.status, errorText);
-      return new Response(
-        JSON.stringify({ error: `Apify API error: ${response.status}` }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const results: ApifyResult[] = await response.json();
-    console.log(`Received ${results.length} results from Apify`);
-
-    // Map results to URL -> view count
-    const viewsMap: Record<string, number | string> = {};
-    
-    for (const result of results) {
-      const url = result.inputUrl || result.url;
-      if (url) {
-        // Try different field names for view count
-        const views = result.videoPlayCount ?? result.playCount;
-        if (views !== undefined && views !== null) {
-          viewsMap[url] = views;
-        } else {
-          viewsMap[url] = 'N/A';
-        }
+    if (mode === 'hiker') {
+      const HIKER_API_KEY = Deno.env.get('HIKER_API_KEY');
+      if (!HIKER_API_KEY) {
+        console.error('HIKER_API_KEY is not configured');
+        return new Response(
+          JSON.stringify({ error: 'HIKER_API_KEY is not configured' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
-    }
-
-    // For any URLs that didn't get results, mark as error
-    for (const url of urls) {
-      if (!(url in viewsMap)) {
-        viewsMap[url] = 'Error';
+      viewsMap = await fetchWithHiker(urls, HIKER_API_KEY);
+    } else {
+      const APIFY_API_KEY = Deno.env.get('APIFY_API_KEY');
+      if (!APIFY_API_KEY) {
+        console.error('APIFY_API_KEY is not configured');
+        return new Response(
+          JSON.stringify({ error: 'APIFY_API_KEY is not configured' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
       }
+      viewsMap = await fetchWithApify(urls, APIFY_API_KEY);
     }
 
     console.log('Successfully processed all URLs');

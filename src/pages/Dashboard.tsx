@@ -99,40 +99,28 @@ export default function Dashboard() {
           // Small delay to simulate API calls
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
-      } else if (apiMode === 'apify') {
-        // Apify mode - use real API
+      } else if (apiMode === 'apify' || apiMode === 'hiker') {
+        // Real API mode - use Apify or Hiker
         const urls = excelData.instagramLinks.map((link) => link.url);
         
         try {
-          const apifyViews = await fetchInstagramViewsBatched(
+          const apiViews = await fetchInstagramViewsBatched(
             urls,
+            apiMode,
             batchSize,
             async (processed) => {
               await updateWithRetry(job.id, { processed_links: processed });
             }
           );
           
-          apifyViews.forEach((value, key) => viewsMap.set(key, value));
+          apiViews.forEach((value, key) => viewsMap.set(key, value));
         } catch (error) {
-          console.error('Apify API error:', error);
-          toast.error('Apify API error - falling back to demo mode');
+          console.error(`${apiMode} API error:`, error);
+          toast.error(`${apiMode} API error - falling back to demo mode`);
           // Fallback to demo mode
           for (const link of excelData.instagramLinks) {
             viewsMap.set(link.url, generateDemoViews());
           }
-        }
-      } else {
-        // Hiker mode or other - TODO: implement
-        for (let i = 0; i < excelData.instagramLinks.length; i++) {
-          const link = excelData.instagramLinks[i];
-          const views = generateDemoViews();
-          viewsMap.set(link.url, views);
-
-          if ((i + 1) % batchSize === 0 || i === excelData.instagramLinks.length - 1) {
-            await updateWithRetry(job.id, { processed_links: i + 1 });
-          }
-
-          await new Promise((resolve) => setTimeout(resolve, 100));
         }
       }
 
