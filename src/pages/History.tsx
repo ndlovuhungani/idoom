@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { format } from 'date-fns';
 import { motion } from 'framer-motion';
 import { FileSpreadsheet, Search, Filter, Loader2 } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import JobCard from '@/components/dashboard/JobCard';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useProcessingJobs, JobStatus } from '@/hooks/useProcessingJobs';
+import { useProcessingJobs, JobStatus, ProcessingJob } from '@/hooks/useProcessingJobs';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
 export default function History() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -20,12 +21,30 @@ export default function History() {
     return matchesSearch && matchesStatus;
   });
 
-  const handleDownload = (job: any) => {
-    if (job.result_file_url) {
-      const link = document.createElement('a');
-      link.href = job.result_file_url;
-      link.download = `processed_${job.file_name}`;
-      link.click();
+  const handleDownload = async (job: ProcessingJob) => {
+    try {
+      if (job.result_file_path) {
+        const { data, error } = await supabase.storage
+          .from('excel-files')
+          .download(job.result_file_path);
+
+        if (error) throw error;
+
+        const url = URL.createObjectURL(data);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `processed_${job.file_name}`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } else if (job.result_file_url) {
+        // Legacy: blob URL support
+        const link = document.createElement('a');
+        link.href = job.result_file_url;
+        link.download = `processed_${job.file_name}`;
+        link.click();
+      }
+    } catch (error) {
+      toast.error('Failed to download file');
     }
   };
 

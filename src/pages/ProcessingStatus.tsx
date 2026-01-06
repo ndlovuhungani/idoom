@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { useProcessingJobs, useUpdateJob } from '@/hooks/useProcessingJobs';
+import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -24,6 +25,7 @@ export default function ProcessingStatus() {
   const { jobId } = useParams();
   const navigate = useNavigate();
   const [isResetting, setIsResetting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const { data: jobs } = useProcessingJobs();
   const updateJob = useUpdateJob();
@@ -31,12 +33,35 @@ export default function ProcessingStatus() {
 
   const progress = job ? Math.round((job.processed_links / job.total_links) * 100) : 0;
 
-  const handleDownload = () => {
-    if (job?.result_file_url) {
-      const link = document.createElement('a');
-      link.href = job.result_file_url;
-      link.download = `processed_${job.file_name}`;
-      link.click();
+  const handleDownload = async () => {
+    if (!job) return;
+    
+    setIsDownloading(true);
+    try {
+      if (job.result_file_path) {
+        const { data, error } = await supabase.storage
+          .from('excel-files')
+          .download(job.result_file_path);
+
+        if (error) throw error;
+
+        const url = URL.createObjectURL(data);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `processed_${job.file_name}`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } else if (job.result_file_url) {
+        // Legacy: blob URL support
+        const link = document.createElement('a');
+        link.href = job.result_file_url;
+        link.download = `processed_${job.file_name}`;
+        link.click();
+      }
+    } catch (error) {
+      toast.error('Failed to download file');
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -179,8 +204,13 @@ export default function ProcessingStatus() {
                     onClick={handleDownload}
                     className="w-full gradient-primary text-primary-foreground"
                     size="lg"
+                    disabled={isDownloading}
                   >
-                    <Download className="w-4 h-4 mr-2" />
+                    {isDownloading ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4 mr-2" />
+                    )}
                     Download Processed File
                   </Button>
                   {job.completed_at && (
