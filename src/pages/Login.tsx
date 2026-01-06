@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Eye, Loader2, Shield, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -23,7 +23,27 @@ export default function Login() {
   const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [showBootstrap, setShowBootstrap] = useState(false);
   const [bootstrapSuccess, setBootstrapSuccess] = useState(false);
+  const [hasExistingAdmin, setHasExistingAdmin] = useState<boolean | null>(null);
   const { signIn } = useAuth();
+
+  // Check if an admin already exists
+  useEffect(() => {
+    const checkForAdmin = async () => {
+      try {
+        const { count } = await supabase
+          .from('user_roles')
+          .select('*', { count: 'exact', head: true })
+          .eq('role', 'admin');
+        
+        setHasExistingAdmin((count ?? 0) > 0);
+      } catch (err) {
+        // If we can't check (e.g., RLS blocks it), assume admin exists to hide button
+        setHasExistingAdmin(true);
+      }
+    };
+    
+    checkForAdmin();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -228,7 +248,7 @@ export default function Login() {
           </CardContent>
         </Card>
 
-        {!showBootstrap && !bootstrapSuccess && (
+        {!showBootstrap && !bootstrapSuccess && hasExistingAdmin === false && (
           <div className="text-center mt-6">
             <p className="text-sm text-muted-foreground mb-2">
               First time setup?
