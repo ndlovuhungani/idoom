@@ -18,6 +18,8 @@ export interface ProcessingJob {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  source_file_path: string | null;
+  result_file_path: string | null;
 }
 
 export function useProcessingJobs() {
@@ -97,7 +99,7 @@ export function useCreateJob() {
   const { user } = useAuth();
 
   return useMutation({
-    mutationFn: async ({ fileName, totalLinks }: { fileName: string; totalLinks: number }) => {
+    mutationFn: async ({ fileName, totalLinks, sourceFilePath }: { fileName: string; totalLinks: number; sourceFilePath: string }) => {
       if (!user) throw new Error('Not authenticated');
 
       const { data, error } = await supabase
@@ -107,6 +109,7 @@ export function useCreateJob() {
           file_name: fileName,
           total_links: totalLinks,
           status: 'pending',
+          source_file_path: sourceFilePath,
         })
         .select()
         .single();

@@ -88,7 +88,9 @@ export type Database = {
           file_name: string
           id: string
           processed_links: number
+          result_file_path: string | null
           result_file_url: string | null
+          source_file_path: string | null
           status: Database["public"]["Enums"]["job_status"]
           total_links: number
           updated_at: string
@@ -102,7 +104,9 @@ export type Database = {
           file_name: string
           id?: string
           processed_links?: number
+          result_file_path?: string | null
           result_file_url?: string | null
+          source_file_path?: string | null
           status?: Database["public"]["Enums"]["job_status"]
           total_links?: number
           updated_at?: string
@@ -116,7 +120,9 @@ export type Database = {
           file_name?: string
           id?: string
           processed_links?: number
+          result_file_path?: string | null
           result_file_url?: string | null
+          source_file_path?: string | null
           status?: Database["public"]["Enums"]["job_status"]
           total_links?: number
           updated_at?: string

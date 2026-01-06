@@ -8,10 +8,11 @@ import StatsCard from '@/components/dashboard/StatsCard';
 import JobCard from '@/components/dashboard/JobCard';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useProcessingJobs, useCreateJob, useUpdateJob } from '@/hooks/useProcessingJobs';
+import { useProcessingJobs, useCreateJob } from '@/hooks/useProcessingJobs';
 import { useAppSettings } from '@/hooks/useAppSettings';
-import { parseExcelFile, updateExcelWithViews, generateDemoViews, ExcelData } from '@/lib/excelProcessor';
-import { fetchInstagramViewsBatched } from '@/lib/api/instagram';
+import { useAuth } from '@/hooks/useAuth';
+import { parseExcelFile, ExcelData } from '@/lib/excelProcessor';
+import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
 export default function Dashboard() {
@@ -20,10 +21,10 @@ export default function Dashboard() {
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [excelData, setExcelData] = useState<ExcelData | null>(null);
 
+  const { user } = useAuth();
   const { data: jobs, isLoading: jobsLoading } = useProcessingJobs();
   const { data: settings } = useAppSettings();
   const createJob = useCreateJob();
-  const updateJob = useUpdateJob();
 
   const recentJobs = jobs?.slice(0, 3) || [];
   const completedCount = jobs?.filter((j) => j.status === 'completed').length || 0;
@@ -42,21 +43,8 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Retry helper with exponential backoff
-  const updateWithRetry = async (jobId: string, updates: Record<string, unknown>, retries = 3) => {
-    for (let i = 0; i < retries; i++) {
-      try {
-        await updateJob.mutateAsync({ id: jobId, ...updates });
-        return;
-      } catch (error) {
-        if (i === retries - 1) throw error;
-        await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
-      }
-    }
-  };
-
   const handleProcess = async () => {
-    if (!currentFile || !excelData) {
+    if (!currentFile || !excelData || !user) {
       toast.error('Please upload a file first');
       return;
     }
@@ -67,93 +55,43 @@ export default function Dashboard() {
     }
 
     setIsProcessing(true);
-    let job: { id: string } | null = null;
 
     try {
-      // Create job in database
-      job = await createJob.mutateAsync({
+      // 1. Upload file to storage
+      const filePath = `${user.id}/${Date.now()}_${currentFile.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from('excel-files')
+        .upload(filePath, currentFile);
+
+      if (uploadError) {
+        throw new Error(`Failed to upload file: ${uploadError.message}`);
+      }
+
+      // 2. Create job with source file path
+      const job = await createJob.mutateAsync({
         fileName: currentFile.name,
         totalLinks: excelData.instagramLinks.length,
+        sourceFilePath: filePath,
       });
 
-      // Update status to processing
-      await updateWithRetry(job.id, { status: 'processing' });
+      // 3. Trigger backend processing
+      const { error: fnError } = await supabase.functions.invoke('process-excel', {
+        body: { jobId: job.id },
+      });
 
-      // Process based on mode
-      const apiMode = settings?.api_mode || 'demo';
-      const viewsMap = new Map<string, number | string>();
-      const batchSize = 10; // Update progress every 10 links
-
-      if (apiMode === 'demo') {
-        // Demo mode - generate fake views with realistic delays
-        for (let i = 0; i < excelData.instagramLinks.length; i++) {
-          const link = excelData.instagramLinks[i];
-          const views = generateDemoViews();
-          viewsMap.set(link.url, views);
-
-          // Batch progress updates (every 10 links or last link)
-          if ((i + 1) % batchSize === 0 || i === excelData.instagramLinks.length - 1) {
-            await updateWithRetry(job.id, { processed_links: i + 1 });
-          }
-
-          // Small delay to simulate API calls
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-      } else if (apiMode === 'apify' || apiMode === 'hiker') {
-        // Real API mode - use Apify or Hiker
-        const urls = excelData.instagramLinks.map((link) => link.url);
-        
-        try {
-          const apiViews = await fetchInstagramViewsBatched(
-            urls,
-            apiMode,
-            batchSize,
-            async (processed) => {
-              await updateWithRetry(job.id, { processed_links: processed });
-            }
-          );
-          
-          apiViews.forEach((value, key) => viewsMap.set(key, value));
-        } catch (error) {
-          console.error(`${apiMode} API error:`, error);
-          toast.error(`${apiMode} API error - falling back to demo mode`);
-          // Fallback to demo mode
-          for (const link of excelData.instagramLinks) {
-            viewsMap.set(link.url, generateDemoViews());
-          }
-        }
+      if (fnError) {
+        console.error('Edge function error:', fnError);
+        // Job is created, processing will continue in background even if this fails
       }
 
-      // Generate updated Excel file (async to preserve formatting)
-      const updatedBlob = await updateExcelWithViews(excelData, viewsMap);
-
-      // Create download URL
-      const downloadUrl = URL.createObjectURL(updatedBlob);
-
-      // Mark job as completed
-      await updateWithRetry(job.id, {
-        status: 'completed',
-        result_file_url: downloadUrl,
-        completed_at: new Date().toISOString(),
-      });
-
-      toast.success('Processing complete!');
+      toast.success('Processing started! You can safely leave this page.');
+      
+      // 4. Navigate to status page immediately
       navigate(`/status/${job.id}`);
+
     } catch (error) {
       console.error('Processing error:', error);
-      toast.error('Failed to process file');
-
-      // Mark job as failed in database
-      if (job?.id) {
-        try {
-          await updateWithRetry(job.id, {
-            status: 'failed',
-            error_message: error instanceof Error ? error.message : 'Unknown error occurred',
-          });
-        } catch {
-          // Silently fail if we can't update the job
-        }
-      }
+      toast.error(error instanceof Error ? error.message : 'Failed to start processing');
     } finally {
       setIsProcessing(false);
       setCurrentFile(null);
@@ -161,8 +99,26 @@ export default function Dashboard() {
     }
   };
 
-  const handleDownload = (job: any) => {
-    if (job.result_file_url) {
+  const handleDownload = async (job: any) => {
+    if (job.result_file_path) {
+      try {
+        const { data, error } = await supabase.storage
+          .from('excel-files')
+          .download(job.result_file_path);
+
+        if (error) throw error;
+
+        const url = URL.createObjectURL(data);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `processed_${job.file_name}`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        toast.error('Failed to download file');
+      }
+    } else if (job.result_file_url) {
+      // Legacy: blob URL support
       const link = document.createElement('a');
       link.href = job.result_file_url;
       link.download = `processed_${job.file_name}`;
