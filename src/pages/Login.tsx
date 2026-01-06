@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Eye, Loader2, Shield, CheckCircle2 } from 'lucide-react';
+import { Moon, Eye, EyeOff, Loader2, Shield, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -129,7 +129,7 @@ export default function Login() {
             className="inline-flex items-center gap-3 mb-4"
           >
             <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center shadow-glow">
-              <Eye className="w-6 h-6 text-primary-foreground" />
+              <Moon className="w-6 h-6 text-primary-foreground" />
             </div>
             <h1 className="text-3xl font-display font-bold text-gradient">InstaDoom</h1>
           </motion.div>
@@ -195,7 +195,7 @@ export default function Login() {
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    <Eye className="w-4 h-4" />
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>

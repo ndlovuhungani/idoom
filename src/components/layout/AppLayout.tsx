@@ -2,7 +2,7 @@ import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Eye,
+  Moon,
   LayoutDashboard,
   History,
   Settings,
@@ -66,7 +66,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
           {/* Logo */}
           <div className="flex items-center gap-3 px-6 py-5 border-b">
             <div className="w-9 h-9 rounded-lg gradient-primary flex items-center justify-center">
-              <Eye className="w-5 h-5 text-primary-foreground" />
+              <Moon className="w-5 h-5 text-primary-foreground" />
             </div>
             <span className="text-xl font-display font-bold text-gradient">InstaDoom</span>
           </div>
@@ -107,7 +107,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
       <header className="fixed top-0 left-0 right-0 z-40 flex items-center justify-between border-b bg-card px-4 py-3 lg:hidden">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg gradient-primary flex items-center justify-center">
-            <Eye className="w-4 h-4 text-primary-foreground" />
+            <Moon className="w-4 h-4 text-primary-foreground" />
           </div>
           <span className="text-lg font-display font-bold text-gradient">InstaDoom</span>
         </div>
