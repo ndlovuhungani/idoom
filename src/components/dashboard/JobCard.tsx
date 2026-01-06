@@ -113,7 +113,7 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
       </div>
 
       {/* Actions */}
-      {(job.status === 'processing' || (job.status === 'completed' && job.result_file_url)) && (
+      {(job.status === 'processing' || (job.status === 'completed' && (job.result_file_path || job.result_file_url))) && (
         <div className="flex flex-col sm:flex-row items-stretch gap-2 mt-4 pt-4 border-t">
           {job.status === 'processing' && (
             <Button variant="outline" size="sm" asChild className="flex-1 min-h-[44px]">
@@ -123,7 +123,7 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
               </Link>
             </Button>
           )}
-          {job.status === 'completed' && job.result_file_url && (
+          {job.status === 'completed' && (job.result_file_path || job.result_file_url) && (
             <Button
               variant="default"
               size="sm"
