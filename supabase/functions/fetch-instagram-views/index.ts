@@ -23,27 +23,67 @@ interface HikerResult {
 }
 
 async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
-  const actorId = 'apify/instagram-reel-scraper';
-  const runUrl = `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${apiKey}`;
-
-  const input: ApifyInput = {
+  // Use tilde (~) instead of slash (/) for actor ID in URL
+  const actorId = 'apify~instagram-reel-scraper';
+  
+  // Start the actor run
+  const runUrl = `https://api.apify.com/v2/acts/${actorId}/runs?token=${apiKey}`;
+  
+  const input = {
     username: urls,
+    resultsLimit: urls.length * 5,
   };
 
-  console.log('Calling Apify API...');
-  const response = await fetch(runUrl, {
+  console.log('Starting Apify actor run...');
+  const runResponse = await fetch(runUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Apify API error:', response.status, errorText);
-    throw new Error(`Apify API error: ${response.status}`);
+  if (!runResponse.ok) {
+    const errorText = await runResponse.text();
+    console.error('Apify run start error:', runResponse.status, errorText);
+    throw new Error(`Apify API error: ${runResponse.status}`);
   }
 
-  const results: ApifyResult[] = await response.json();
+  const runData = await runResponse.json();
+  const runId = runData.data.id;
+  const datasetId = runData.data.defaultDatasetId;
+  
+  console.log(`Actor run started: ${runId}, waiting for completion...`);
+  
+  // Poll for run completion (max 2 minutes)
+  let attempts = 0;
+  const maxAttempts = 24;
+  
+  while (attempts < maxAttempts) {
+    const statusResponse = await fetch(
+      `https://api.apify.com/v2/actor-runs/${runId}?token=${apiKey}`
+    );
+    const statusData = await statusResponse.json();
+    const status = statusData.data.status;
+    
+    if (status === 'SUCCEEDED') {
+      console.log('Actor run completed successfully');
+      break;
+    } else if (status === 'FAILED' || status === 'ABORTED') {
+      throw new Error(`Actor run ${status}`);
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    attempts++;
+  }
+  
+  if (attempts >= maxAttempts) {
+    throw new Error('Actor run timed out');
+  }
+  
+  // Fetch results from dataset
+  const datasetUrl = `https://api.apify.com/v2/datasets/${datasetId}/items?token=${apiKey}`;
+  const resultsResponse = await fetch(datasetUrl);
+  const results: ApifyResult[] = await resultsResponse.json();
+  
   console.log(`Received ${results.length} results from Apify`);
 
   const viewsMap: Record<string, number | string> = {};
