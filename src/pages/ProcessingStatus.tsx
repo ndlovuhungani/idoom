@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { useProcessingJobs, useUpdateJob } from '@/hooks/useProcessingJobs';
+import { useJob, useUpdateJob } from '@/hooks/useProcessingJobs';
 import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -27,11 +27,13 @@ export default function ProcessingStatus() {
   const [isResetting, setIsResetting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
-  const { data: jobs } = useProcessingJobs();
+  const { data: job } = useJob(jobId);
   const updateJob = useUpdateJob();
-  const job = jobs?.find((j) => j.id === jobId);
 
-  const progress = job ? Math.round((job.processed_links / job.total_links) * 100) : 0;
+  // Guard against division by zero
+  const progress = job && job.total_links > 0 
+    ? Math.round((job.processed_links / job.total_links) * 100) 
+    : 0;
 
   const handleDownload = async () => {
     if (!job) return;

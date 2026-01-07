@@ -258,9 +258,13 @@ async function fetchSingleHikerUrl(url: string, apiKey: string): Promise<{ igId:
     return { igId: '', views: 'Error' };
   }
 
+  // Canonicalize URL to /p/{shortcode}/ format for better API compatibility
+  const canonicalUrl = `https://www.instagram.com/p/${igId}/`;
+
   try {
+    // Use the /v2/media/info/by/url endpoint (more reliable)
     const response = await fetch(
-      `https://api.hikerapi.com/v2/media/by/url?url=${encodeURIComponent(url)}`,
+      `https://api.hikerapi.com/v2/media/info/by/url?url=${encodeURIComponent(canonicalUrl)}`,
       {
         headers: {
           'accept': 'application/json',
@@ -274,10 +278,34 @@ async function fetchSingleHikerUrl(url: string, apiKey: string): Promise<{ igId:
       return { igId, views: 'Error' };
     }
 
-    const result: HikerResult = await response.json();
-    // Check view_count first (primary field for reels), then fallbacks
-    const views = result.view_count ?? result.play_count ?? result.video_play_count;
-    console.log(`Hiker result: ID=${igId}, view_count=${result.view_count}, play_count=${result.play_count}, final=${views}`);
+    const raw = await response.json();
+    
+    // Log response structure for debugging (once per first request)
+    console.log(`Hiker response for ID=${igId}: keys=${Object.keys(raw).join(',')}`);
+    
+    // Try multiple possible response structures
+    let views: number | undefined;
+    
+    // Direct top-level fields
+    views = raw?.view_count ?? raw?.play_count ?? raw?.video_play_count;
+    
+    // Nested under 'data'
+    if (views === undefined && raw?.data) {
+      views = raw.data.view_count ?? raw.data.play_count ?? raw.data.video_play_count;
+    }
+    
+    // Nested under 'items' array
+    if (views === undefined && Array.isArray(raw?.items) && raw.items[0]) {
+      const item = raw.items[0];
+      views = item.view_count ?? item.play_count ?? item.video_play_count;
+    }
+    
+    // Nested under 'media'
+    if (views === undefined && raw?.media) {
+      views = raw.media.view_count ?? raw.media.play_count ?? raw.media.video_play_count;
+    }
+    
+    console.log(`Hiker result: ID=${igId}, views=${views}`);
     return { igId, views: views !== undefined && views !== null ? views : 'N/A' };
   } catch (error) {
     console.error(`Hiker: Exception for ID=${igId}:`, error);
