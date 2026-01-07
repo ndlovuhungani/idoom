@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from './useAuth';
 import { useEffect } from 'react';
 
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'paused';
 
 export interface ProcessingJob {
   id: string;
@@ -20,6 +20,9 @@ export interface ProcessingJob {
   completed_at: string | null;
   source_file_path: string | null;
   result_file_path: string | null;
+  paused_at: string | null;
+  resume_from_index: number;
+  partial_result_path: string | null;
 }
 
 export function useProcessingJobs() {
@@ -50,7 +53,7 @@ export function useActiveJob() {
       const { data, error } = await supabase
         .from('processing_jobs')
         .select('*')
-        .in('status', ['pending', 'processing'])
+        .in('status', ['pending', 'processing', 'paused'])
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -138,6 +141,60 @@ export function useUpdateJob() {
         .eq('id', id);
 
       if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['processing-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['active-job'] });
+      queryClient.invalidateQueries({ queryKey: ['job'] });
+    },
+  });
+}
+
+export function usePauseJob() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (jobId: string) => {
+      const { error } = await supabase
+        .from('processing_jobs')
+        .update({ 
+          status: 'paused',
+          paused_at: new Date().toISOString(),
+        })
+        .eq('id', jobId);
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['processing-jobs'] });
+      queryClient.invalidateQueries({ queryKey: ['active-job'] });
+      queryClient.invalidateQueries({ queryKey: ['job'] });
+    },
+  });
+}
+
+export function useResumeJob() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (jobId: string) => {
+      // First update status back to processing
+      const { error: updateError } = await supabase
+        .from('processing_jobs')
+        .update({ 
+          status: 'processing',
+          paused_at: null,
+        })
+        .eq('id', jobId);
+
+      if (updateError) throw updateError;
+
+      // Then trigger the edge function to resume
+      const { error: invokeError } = await supabase.functions.invoke('process-excel', {
+        body: { jobId },
+      });
+
+      if (invokeError) throw invokeError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['processing-jobs'] });

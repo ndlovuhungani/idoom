@@ -408,6 +408,60 @@ function generateDemoViews(): number {
   return Math.floor(Math.random() * 50000 + 5000);
 }
 
+// Helper to check if job should stop (paused or cancelled)
+async function shouldStopProcessing(jobId: string, supabase: any): Promise<{ stop: boolean; status: string }> {
+  const { data } = await supabase
+    .from('processing_jobs')
+    .select('status')
+    .eq('id', jobId)
+    .single();
+  
+  const status = data?.status || 'processing';
+  const stop = status === 'paused' || status === 'failed';
+  return { stop, status };
+}
+
+// Helper to save partial results to storage
+async function savePartialResults(
+  workbook: any,
+  jobId: string,
+  sourceFilePath: string,
+  currentIndex: number,
+  supabase: any
+): Promise<string> {
+  const buffer = await workbook.xlsx.writeBuffer();
+  const resultBlob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+
+  const partialPath = sourceFilePath.replace(/\.xlsx?$/i, '_partial.xlsx');
+  
+  const { error } = await supabase
+    .storage
+    .from('excel-files')
+    .upload(partialPath, resultBlob, {
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      upsert: true,
+    });
+
+  if (error) {
+    console.error('Failed to save partial results:', error);
+  } else {
+    // Update job with partial result path and resume index
+    await supabase
+      .from('processing_jobs')
+      .update({
+        partial_result_path: partialPath,
+        resume_from_index: currentIndex,
+      })
+      .eq('id', jobId);
+    
+    console.log(`Saved partial results at index ${currentIndex} to ${partialPath}`);
+  }
+
+  return partialPath;
+}
+
 async function processJob(jobId: string, supabase: any) {
   console.log(`Starting background processing for job: ${jobId}`);
   
@@ -429,17 +483,30 @@ async function processJob(jobId: string, supabase: any) {
       throw new Error('No source file path in job');
     }
 
+    // Get resume index (for resuming paused jobs)
+    const resumeFromIndex = job.resume_from_index || 0;
+    const isResume = resumeFromIndex > 0;
+    
+    console.log(`Resume from index: ${resumeFromIndex}, isResume: ${isResume}`);
+
     // Update status to processing
     await supabase
       .from('processing_jobs')
-      .update({ status: 'processing' })
+      .update({ status: 'processing', paused_at: null })
       .eq('id', jobId);
 
-    // Download source file from storage
+    // Check which file to load - partial results if resuming, otherwise source
+    let fileToLoad = sourceFilePath;
+    if (isResume && job.partial_result_path) {
+      fileToLoad = job.partial_result_path;
+      console.log(`Resuming from partial file: ${fileToLoad}`);
+    }
+
+    // Download file from storage
     const { data: fileData, error: downloadError } = await supabase
       .storage
       .from('excel-files')
-      .download(sourceFilePath);
+      .download(fileToLoad);
 
     if (downloadError || !fileData) {
       throw new Error(`Failed to download file: ${downloadError?.message}`);
@@ -515,13 +582,55 @@ async function processJob(jobId: string, supabase: any) {
     // Fetch views - keyed by Instagram ID
     const viewsByIgId: Record<string, number | string> = {};
     const batchSize = 10;
-    let processedCount = 0;
-    let failedCount = 0;
+    const saveInterval = 20; // Save partial results every 20 links
+    const checkInterval = 5; // Check for pause every 5 links
+    let processedCount = resumeFromIndex;
+    let failedCount = job.failed_links || 0;
+
+    // Helper to write views to cells
+    const writeCellViews = (link: LinkInfo, views: number | string) => {
+      const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
+      const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
+      const isError = views === 'Error' || views === 'N/A';
+      
+      cell.value = isNaN(numericViews) ? views : numericViews;
+      
+      // Apply red color formatting for error cells
+      if (isError) {
+        cell.font = {
+          color: { argb: 'FFFF0000' },
+          bold: true
+        };
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFEEEE' }
+        };
+      }
+    };
 
     if (apiMode === 'demo') {
-      for (let i = 0; i < instagramLinks.length; i++) {
+      for (let i = resumeFromIndex; i < instagramLinks.length; i++) {
+        // Check for pause/cancel every N links
+        if (i > resumeFromIndex && i % checkInterval === 0) {
+          const { stop, status } = await shouldStopProcessing(jobId, supabase);
+          if (stop) {
+            console.log(`Job ${jobId} ${status}, saving partial results at index ${i}`);
+            await savePartialResults(workbook, jobId, sourceFilePath, i, supabase);
+            if (status === 'paused') {
+              await supabase
+                .from('processing_jobs')
+                .update({ paused_at: new Date().toISOString() })
+                .eq('id', jobId);
+            }
+            return;
+          }
+        }
+
         const link = instagramLinks[i];
-        viewsByIgId[link.igId] = generateDemoViews();
+        const views = generateDemoViews();
+        viewsByIgId[link.igId] = views;
+        writeCellViews(link, views);
         processedCount++;
 
         // Update progress every 10 links
@@ -532,6 +641,11 @@ async function processJob(jobId: string, supabase: any) {
             .eq('id', jobId);
         }
 
+        // Save partial results periodically
+        if ((i + 1) % saveInterval === 0) {
+          await savePartialResults(workbook, jobId, sourceFilePath, i + 1, supabase);
+        }
+
         // Small delay to simulate API calls
         await new Promise(r => setTimeout(r, 50));
       }
@@ -540,12 +654,29 @@ async function processJob(jobId: string, supabase: any) {
       const apiKey = Deno.env.get('HIKER_API_KEY');
       if (!apiKey) throw new Error('HIKER_API_KEY not configured');
       
-      for (let i = 0; i < instagramLinks.length; i++) {
+      for (let i = resumeFromIndex; i < instagramLinks.length; i++) {
+        // Check for pause/cancel every N links
+        if (i > resumeFromIndex && i % checkInterval === 0) {
+          const { stop, status } = await shouldStopProcessing(jobId, supabase);
+          if (stop) {
+            console.log(`Job ${jobId} ${status}, saving partial results at index ${i}`);
+            await savePartialResults(workbook, jobId, sourceFilePath, i, supabase);
+            if (status === 'paused') {
+              await supabase
+                .from('processing_jobs')
+                .update({ paused_at: new Date().toISOString() })
+                .eq('id', jobId);
+            }
+            return;
+          }
+        }
+
         const link = instagramLinks[i];
         const result = await fetchSingleHikerUrl(link.url, apiKey, i);
         
         if (result.igId) {
           viewsByIgId[result.igId] = result.views;
+          writeCellViews(link, result.views);
           if (result.views === 'Error' || result.views === 'N/A') failedCount++;
         }
         
@@ -555,6 +686,11 @@ async function processJob(jobId: string, supabase: any) {
           .from('processing_jobs')
           .update({ processed_links: processedCount, failed_links: failedCount })
           .eq('id', jobId);
+
+        // Save partial results periodically
+        if ((i + 1) % saveInterval === 0) {
+          await savePartialResults(workbook, jobId, sourceFilePath, i + 1, supabase);
+        }
       }
     } else {
       // Apify: Process in batches
@@ -563,15 +699,31 @@ async function processJob(jobId: string, supabase: any) {
       
       const urls = instagramLinks.map(l => l.url);
       
-      for (let i = 0; i < urls.length; i += batchSize) {
+      for (let i = resumeFromIndex; i < urls.length; i += batchSize) {
+        // Check for pause/cancel before each batch
+        const { stop, status } = await shouldStopProcessing(jobId, supabase);
+        if (stop) {
+          console.log(`Job ${jobId} ${status}, saving partial results at index ${i}`);
+          await savePartialResults(workbook, jobId, sourceFilePath, i, supabase);
+          if (status === 'paused') {
+            await supabase
+              .from('processing_jobs')
+              .update({ paused_at: new Date().toISOString() })
+              .eq('id', jobId);
+          }
+          return;
+        }
+
         const batch = urls.slice(i, i + batchSize);
         
         try {
           const batchViews = await fetchWithApify(batch, apiKey);
 
-          // Merge batch results
+          // Merge batch results and write to cells
           Object.entries(batchViews).forEach(([igId, views]) => {
             viewsByIgId[igId] = views;
+            const link = instagramLinks.find(l => l.igId === igId);
+            if (link) writeCellViews(link, views);
             if (views === 'Error') failedCount++;
           });
         } catch (error) {
@@ -581,6 +733,8 @@ async function processJob(jobId: string, supabase: any) {
             const igId = extractInstagramId(url);
             if (igId) {
               viewsByIgId[igId] = 'Error';
+              const link = instagramLinks.find(l => l.igId === igId);
+              if (link) writeCellViews(link, 'Error');
               failedCount++;
             }
           });
@@ -591,6 +745,9 @@ async function processJob(jobId: string, supabase: any) {
           .from('processing_jobs')
           .update({ processed_links: processedCount, failed_links: failedCount })
           .eq('id', jobId);
+
+        // Save partial results after each batch
+        await savePartialResults(workbook, jobId, sourceFilePath, processedCount, supabase);
       }
     }
 
@@ -599,34 +756,6 @@ async function processJob(jobId: string, supabase: any) {
     const naCount = Object.values(viewsByIgId).filter(v => v === 'N/A').length;
     const errorCount = Object.values(viewsByIgId).filter(v => v === 'Error').length;
     console.log(`Views summary: ${successCount} success, ${naCount} N/A, ${errorCount} Error`);
-
-    // Update Excel with views - lookup by Instagram ID
-    for (const link of instagramLinks) {
-      const views = viewsByIgId[link.igId];
-      if (views === undefined) {
-        console.log(`No views found for ID=${link.igId}`);
-        continue;
-      }
-
-        const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
-        const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
-        const isError = views === 'Error' || views === 'N/A';
-        
-        cell.value = isNaN(numericViews) ? views : numericViews;
-        
-        // Apply red color formatting for error cells
-        if (isError) {
-          cell.font = {
-            color: { argb: 'FFFF0000' }, // Red color
-            bold: true
-          };
-          cell.fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFFFEEEE' } // Light red background
-          };
-        }
-    }
 
     // Write updated workbook to buffer
     const buffer = await workbook.xlsx.writeBuffer();
@@ -657,6 +786,8 @@ async function processJob(jobId: string, supabase: any) {
         processed_links: instagramLinks.length,
         failed_links: failedCount,
         completed_at: new Date().toISOString(),
+        partial_result_path: null, // Clear partial path on completion
+        resume_from_index: 0,
       })
       .eq('id', jobId);
 
