@@ -608,9 +608,24 @@ async function processJob(jobId: string, supabase: any) {
         continue;
       }
 
-      const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
-      const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
-      cell.value = isNaN(numericViews) ? views : numericViews;
+        const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
+        const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
+        const isError = views === 'Error' || views === 'N/A';
+        
+        cell.value = isNaN(numericViews) ? views : numericViews;
+        
+        // Apply red color formatting for error cells
+        if (isError) {
+          cell.font = {
+            color: { argb: 'FFFF0000' }, // Red color
+            bold: true
+          };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFFEEEE' } // Light red background
+          };
+        }
     }
 
     // Write updated workbook to buffer
