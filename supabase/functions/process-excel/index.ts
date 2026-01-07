@@ -47,6 +47,7 @@ interface ApifyResult {
 }
 
 interface HikerResult {
+  view_count?: number;       // Primary field for reels/videos
   play_count?: number;
   video_play_count?: number;
 }
@@ -250,44 +251,38 @@ async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<st
   return viewsByIgId;
 }
 
-async function fetchWithHiker(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
-  const viewsByIgId: Record<string, number | string> = {};
-
-  for (const url of urls) {
-    const igId = extractInstagramId(url);
-    if (!igId) {
-      console.log(`Hiker: Could not extract ID from ${url}`);
-      continue;
-    }
-
-    try {
-      const response = await fetch(
-        `https://api.hikerapi.com/v2/media/by/url?url=${encodeURIComponent(url)}`,
-        {
-          headers: {
-            'accept': 'application/json',
-            'x-access-key': apiKey,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        console.log(`Hiker: Error ${response.status} for ID=${igId}`);
-        viewsByIgId[igId] = 'Error';
-        continue;
-      }
-
-      const result: HikerResult = await response.json();
-      const views = result.play_count ?? result.video_play_count;
-      viewsByIgId[igId] = views !== undefined && views !== null ? views : 'N/A';
-      console.log(`Hiker result: ID=${igId}, views=${views}`);
-    } catch (error) {
-      console.error(`Hiker: Exception for ID=${igId}:`, error);
-      viewsByIgId[igId] = 'Error';
-    }
+async function fetchSingleHikerUrl(url: string, apiKey: string): Promise<{ igId: string; views: number | string }> {
+  const igId = extractInstagramId(url);
+  if (!igId) {
+    console.log(`Hiker: Could not extract ID from ${url}`);
+    return { igId: '', views: 'Error' };
   }
 
-  return viewsByIgId;
+  try {
+    const response = await fetch(
+      `https://api.hikerapi.com/v2/media/by/url?url=${encodeURIComponent(url)}`,
+      {
+        headers: {
+          'accept': 'application/json',
+          'x-access-key': apiKey,
+        },
+      }
+    );
+
+    if (!response.ok) {
+      console.log(`Hiker: Error ${response.status} for ID=${igId}`);
+      return { igId, views: 'Error' };
+    }
+
+    const result: HikerResult = await response.json();
+    // Check view_count first (primary field for reels), then fallbacks
+    const views = result.view_count ?? result.play_count ?? result.video_play_count;
+    console.log(`Hiker result: ID=${igId}, view_count=${result.view_count}, play_count=${result.play_count}, final=${views}`);
+    return { igId, views: views !== undefined && views !== null ? views : 'N/A' };
+  } catch (error) {
+    console.error(`Hiker: Exception for ID=${igId}:`, error);
+    return { igId, views: 'Error' };
+  }
 }
 
 function generateDemoViews(): number {
@@ -438,24 +433,39 @@ async function processJob(jobId: string, supabase: any) {
         // Small delay to simulate API calls
         await new Promise(r => setTimeout(r, 50));
       }
+    } else if (apiMode === 'hiker') {
+      // Hiker: Process each URL individually for gradual progress
+      const apiKey = Deno.env.get('HIKER_API_KEY');
+      if (!apiKey) throw new Error('HIKER_API_KEY not configured');
+      
+      for (let i = 0; i < instagramLinks.length; i++) {
+        const link = instagramLinks[i];
+        const result = await fetchSingleHikerUrl(link.url, apiKey);
+        
+        if (result.igId) {
+          viewsByIgId[result.igId] = result.views;
+          if (result.views === 'Error') failedCount++;
+        }
+        
+        processedCount = i + 1;
+        // Update progress after each URL
+        await supabase
+          .from('processing_jobs')
+          .update({ processed_links: processedCount, failed_links: failedCount })
+          .eq('id', jobId);
+      }
     } else {
+      // Apify: Process in batches
+      const apiKey = Deno.env.get('APIFY_API_KEY');
+      if (!apiKey) throw new Error('APIFY_API_KEY not configured');
+      
       const urls = instagramLinks.map(l => l.url);
       
       for (let i = 0; i < urls.length; i += batchSize) {
         const batch = urls.slice(i, i + batchSize);
         
         try {
-          let batchViews: Record<string, number | string>;
-          
-          if (apiMode === 'hiker') {
-            const apiKey = Deno.env.get('HIKER_API_KEY');
-            if (!apiKey) throw new Error('HIKER_API_KEY not configured');
-            batchViews = await fetchWithHiker(batch, apiKey);
-          } else {
-            const apiKey = Deno.env.get('APIFY_API_KEY');
-            if (!apiKey) throw new Error('APIFY_API_KEY not configured');
-            batchViews = await fetchWithApify(batch, apiKey);
-          }
+          const batchViews = await fetchWithApify(batch, apiKey);
 
           // Merge batch results
           Object.entries(batchViews).forEach(([igId, views]) => {
