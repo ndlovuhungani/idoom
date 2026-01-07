@@ -1,3 +1,4 @@
+import { useState, useEffect, useMemo } from 'react';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -10,11 +11,12 @@ import {
   Download,
   ExternalLink,
   Pause,
+  Timer,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ProcessingJob, JobStatus } from '@/hooks/useProcessingJobs';
-import { cn } from '@/lib/utils';
+import { cn, formatDuration } from '@/lib/utils';
 
 interface JobCardProps {
   job: ProcessingJob;
@@ -38,6 +40,33 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
   const progress =
     job.total_links > 0 ? Math.round((job.processed_links / job.total_links) * 100) : 0;
 
+  // Time tracking for processing jobs
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (job.status !== 'processing') return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [job.status]);
+
+  const timeInfo = useMemo(() => {
+    const startTime = new Date(job.created_at).getTime();
+
+    if (job.status === 'completed' && job.completed_at) {
+      const endTime = new Date(job.completed_at).getTime();
+      return { type: 'completed' as const, duration: endTime - startTime };
+    }
+
+    if (job.status === 'processing' && job.processed_links > 0) {
+      const elapsedMs = now - startTime;
+      const avgTimePerLink = elapsedMs / job.processed_links;
+      const remainingLinks = job.total_links - job.processed_links;
+      return { type: 'processing' as const, remaining: avgTimePerLink * remainingLinks };
+    }
+
+    return null;
+  }, [job, now]);
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}
@@ -58,6 +87,12 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
               <p className="text-xs text-muted-foreground">
                 {format(new Date(job.created_at), 'MMM d, yyyy • h:mm a')}
               </p>
+              {timeInfo?.type === 'completed' && (
+                <p className="text-xs text-success flex items-center gap-1">
+                  <Timer className="w-3 h-3" />
+                  Completed in {formatDuration(timeInfo.duration)}
+                </p>
+              )}
             </div>
             <Badge
               variant={status.variant}
@@ -82,6 +117,9 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
               <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
                 <span>
                   {job.processed_links} of {job.total_links} links
+                  {job.status === 'processing' && timeInfo?.type === 'processing' && (
+                    <span className="ml-1">• ~{formatDuration(timeInfo.remaining)} left</span>
+                  )}
                 </span>
                 <span>{progress}%</span>
               </div>
