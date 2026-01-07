@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, forwardRef } from 'react';
 import { format } from 'date-fns';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
@@ -34,7 +34,7 @@ const statusConfig: Record<
   paused: { label: 'Paused', icon: Pause, variant: 'outline' },
 };
 
-export default function JobCard({ job, onDownload }: JobCardProps) {
+const JobCard = forwardRef<HTMLDivElement, JobCardProps>(({ job, onDownload }, ref) => {
   const status = statusConfig[job.status];
   const StatusIcon = status.icon;
   const progress =
@@ -69,6 +69,7 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
 
   return (
     <motion.div
+      ref={ref}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="bg-card border rounded-xl p-4 hover:shadow-md transition-all"
@@ -178,4 +179,7 @@ export default function JobCard({ job, onDownload }: JobCardProps) {
       )}
     </motion.div>
   );
-}
+});
+JobCard.displayName = "JobCard";
+
+export default JobCard;
