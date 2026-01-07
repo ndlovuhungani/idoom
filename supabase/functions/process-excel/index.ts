@@ -20,13 +20,24 @@ function isInstagramUrl(url: string): boolean {
   return INSTAGRAM_URL_PATTERN.test(trimmed) || INSTAGRAM_DOMAIN_PATTERN.test(trimmed);
 }
 
+// Extract Instagram ID (shortcode) from URL - used for matching
+function extractInstagramId(url: string): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim().replace(/^["']|["']$/g, '');
+  const match = trimmed.match(INSTAGRAM_URL_PATTERN);
+  return match ? match[1] : null;
+}
+
 interface LinkInfo {
   row: number;
   col: number;
   url: string;
+  igId: string; // Instagram shortcode for matching
   viewsRow: number;
   viewsCol: number;
 }
+
+type FileFormat = 'vertical' | 'horizontal-below' | 'alternating';
 
 interface ApifyResult {
   url?: string;
@@ -40,11 +51,119 @@ interface HikerResult {
   video_play_count?: number;
 }
 
-async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
-  // Use tilde (~) instead of slash (/) for actor ID in URL
-  const actorId = 'apify~instagram-reel-scraper';
+// Helper to check if a cell value looks like a "Views" header
+function isViewsHeader(value: string): boolean {
+  if (!value) return false;
+  const lower = value.toLowerCase().trim();
+  return lower === 'views' || lower === 'view' || lower === 'visualizações' || 
+         lower === 'vistas' || lower === 'vues' || lower === 'aufrufe';
+}
+
+// Helper to get cell value as string
+function getCellValue(cell: any): string {
+  if (!cell || !cell.value) return '';
+  const val = cell.value;
+  if (typeof val === 'object' && 'hyperlink' in val) {
+    return String(val.hyperlink || val.text || '');
+  } else if (typeof val === 'object' && 'richText' in val) {
+    return val.richText.map((rt: any) => rt.text).join('');
+  }
+  return String(val);
+}
+
+// Detect the layout format of the Excel file
+function detectFormat(worksheet: any, links: { row: number; col: number }[]): FileFormat {
+  if (links.length < 2) return 'vertical';
   
-  // Start the actor run
+  // Check for alternating pattern (Link|Views|Link|Views in same row)
+  const rowGroups = new Map<number, number[]>();
+  for (const link of links) {
+    const cols = rowGroups.get(link.row) || [];
+    cols.push(link.col);
+    rowGroups.set(link.row, cols);
+  }
+  
+  // If multiple links in same row with gaps, likely alternating
+  for (const [_row, cols] of rowGroups) {
+    if (cols.length >= 2) {
+      cols.sort((a, b) => a - b);
+      // Check if there's a gap of 2 (Link|Views|Link pattern)
+      for (let i = 1; i < cols.length; i++) {
+        if (cols[i] - cols[i - 1] === 2) {
+          return 'alternating';
+        }
+      }
+    }
+  }
+  
+  // Check first few links for vertical vs horizontal
+  const firstLink = links[0];
+  const secondLink = links[1];
+  
+  if (firstLink.row === secondLink.row) {
+    // Same row = horizontal layout, views go below
+    return 'horizontal-below';
+  }
+  
+  // Check if there's a "Views" header to the right
+  const rightCell = worksheet.getCell(firstLink.row, firstLink.col + 1);
+  const rightValue = getCellValue(rightCell);
+  if (isViewsHeader(rightValue) || !isInstagramUrl(rightValue)) {
+    return 'vertical';
+  }
+  
+  return 'vertical';
+}
+
+// Find a safe cell to write views (won't overwrite Instagram links)
+function findSafeViewsCell(
+  worksheet: any, 
+  link: { row: number; col: number }, 
+  format: FileFormat,
+  allLinks: Set<string>
+): { row: number; col: number } {
+  const cellKey = (r: number, c: number) => `${r}:${c}`;
+  
+  if (format === 'horizontal-below') {
+    // Views go in the row below
+    const targetRow = link.row + 1;
+    const targetCol = link.col;
+    
+    // Check if safe
+    const cell = worksheet.getCell(targetRow, targetCol);
+    const value = getCellValue(cell);
+    if (!isInstagramUrl(value) && !allLinks.has(cellKey(targetRow, targetCol))) {
+      return { row: targetRow, col: targetCol };
+    }
+    
+    // Try row + 2 as fallback
+    return { row: link.row + 2, col: link.col };
+  }
+  
+  // Vertical or alternating: views go to the right
+  let targetCol = link.col + 1;
+  
+  // Check if the target cell contains an Instagram URL
+  const rightCell = worksheet.getCell(link.row, targetCol);
+  const rightValue = getCellValue(rightCell);
+  
+  if (isInstagramUrl(rightValue) || allLinks.has(cellKey(link.row, targetCol))) {
+    // Try next column
+    targetCol = link.col + 2;
+    const nextCell = worksheet.getCell(link.row, targetCol);
+    const nextValue = getCellValue(nextCell);
+    
+    if (isInstagramUrl(nextValue) || allLinks.has(cellKey(link.row, targetCol))) {
+      // Last resort: try below the link
+      return { row: link.row + 1, col: link.col };
+    }
+  }
+  
+  return { row: link.row, col: targetCol };
+}
+
+async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
+  const actorId = 'apify~instagram-reel-scraper';
   const runUrl = `https://api.apify.com/v2/acts/${actorId}/runs?token=${apiKey}`;
   
   const input = {
@@ -52,7 +171,7 @@ async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<st
     resultsLimit: urls.length * 5,
   };
 
-  console.log('Starting Apify actor run...');
+  console.log(`Starting Apify actor run with ${urls.length} URLs...`);
   const runResponse = await fetch(runUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -104,29 +223,43 @@ async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<st
   
   console.log(`Received ${results.length} results from Apify`);
 
-  const viewsMap: Record<string, number | string> = {};
+  // Build map by Instagram ID, not URL string
+  const viewsByIgId: Record<string, number | string> = {};
   
   for (const result of results) {
-    const url = result.inputUrl || result.url;
-    if (url) {
-      const views = result.videoPlayCount ?? result.playCount;
-      viewsMap[url] = views !== undefined && views !== null ? views : 'N/A';
+    const resultUrl = result.inputUrl || result.url;
+    if (resultUrl) {
+      const igId = extractInstagramId(resultUrl);
+      if (igId) {
+        const views = result.videoPlayCount ?? result.playCount;
+        viewsByIgId[igId] = views !== undefined && views !== null ? views : 'N/A';
+        console.log(`Apify result: ID=${igId}, views=${views}`);
+      }
     }
   }
 
+  // Mark any requested IDs not in results as Error
   for (const url of urls) {
-    if (!(url in viewsMap)) {
-      viewsMap[url] = 'Error';
+    const igId = extractInstagramId(url);
+    if (igId && !(igId in viewsByIgId)) {
+      viewsByIgId[igId] = 'Error';
     }
   }
 
-  return viewsMap;
+  console.log(`Apify final map has ${Object.keys(viewsByIgId).length} entries`);
+  return viewsByIgId;
 }
 
 async function fetchWithHiker(urls: string[], apiKey: string): Promise<Record<string, number | string>> {
-  const viewsMap: Record<string, number | string> = {};
+  const viewsByIgId: Record<string, number | string> = {};
 
   for (const url of urls) {
+    const igId = extractInstagramId(url);
+    if (!igId) {
+      console.log(`Hiker: Could not extract ID from ${url}`);
+      continue;
+    }
+
     try {
       const response = await fetch(
         `https://api.hikerapi.com/v2/media/by/url?url=${encodeURIComponent(url)}`,
@@ -139,19 +272,22 @@ async function fetchWithHiker(urls: string[], apiKey: string): Promise<Record<st
       );
 
       if (!response.ok) {
-        viewsMap[url] = 'Error';
+        console.log(`Hiker: Error ${response.status} for ID=${igId}`);
+        viewsByIgId[igId] = 'Error';
         continue;
       }
 
       const result: HikerResult = await response.json();
       const views = result.play_count ?? result.video_play_count;
-      viewsMap[url] = views !== undefined && views !== null ? views : 'N/A';
-    } catch {
-      viewsMap[url] = 'Error';
+      viewsByIgId[igId] = views !== undefined && views !== null ? views : 'N/A';
+      console.log(`Hiker result: ID=${igId}, views=${views}`);
+    } catch (error) {
+      console.error(`Hiker: Exception for ID=${igId}:`, error);
+      viewsByIgId[igId] = 'Error';
     }
   }
 
-  return viewsMap;
+  return viewsByIgId;
 }
 
 function generateDemoViews(): number {
@@ -212,7 +348,7 @@ async function processJob(jobId: string, supabase: any) {
       throw new Error(`Failed to download file: ${downloadError?.message}`);
     }
 
-    // Parse Excel file using SheetJS (works in Deno)
+    // Parse Excel file
     const { default: ExcelJS } = await import("https://esm.sh/exceljs@4.4.0");
     const workbook = new ExcelJS.Workbook();
     const arrayBuffer = await fileData.arrayBuffer();
@@ -223,35 +359,52 @@ async function processJob(jobId: string, supabase: any) {
       throw new Error('No worksheets found');
     }
 
-    // Find Instagram links
-    const instagramLinks: LinkInfo[] = [];
+    // Find Instagram links and extract IDs
+    const rawLinks: { row: number; col: number; url: string; igId: string }[] = [];
     
     worksheet.eachRow({ includeEmpty: false }, (row: any, rowNumber: number) => {
       row.eachCell({ includeEmpty: false }, (cell: any, colNumber: number) => {
-        let value = '';
-        if (cell.value) {
-          if (typeof cell.value === 'object' && 'hyperlink' in cell.value) {
-            value = String(cell.value.hyperlink || cell.value.text || '');
-          } else if (typeof cell.value === 'object' && 'richText' in cell.value) {
-            value = cell.value.richText.map((rt: any) => rt.text).join('');
-          } else {
-            value = String(cell.value);
-          }
-        }
-
+        const value = getCellValue(cell);
+        
         if (isInstagramUrl(value)) {
-          instagramLinks.push({
-            row: rowNumber,
-            col: colNumber,
-            url: value.trim().replace(/^["']|["']$/g, ''),
-            viewsRow: rowNumber,
-            viewsCol: colNumber + 1,
-          });
+          const cleanUrl = value.trim().replace(/^["']|["']$/g, '');
+          const igId = extractInstagramId(cleanUrl);
+          if (igId) {
+            rawLinks.push({
+              row: rowNumber,
+              col: colNumber,
+              url: cleanUrl,
+              igId,
+            });
+          }
         }
       });
     });
 
-    console.log(`Found ${instagramLinks.length} Instagram links`);
+    console.log(`Found ${rawLinks.length} Instagram links`);
+
+    // Detect file format
+    const format = detectFormat(worksheet, rawLinks);
+    console.log(`Detected format: ${format}`);
+
+    // Build set of all link cell positions
+    const allLinkCells = new Set(rawLinks.map(l => `${l.row}:${l.col}`));
+
+    // Calculate views cell for each link
+    const instagramLinks: LinkInfo[] = rawLinks.map(link => {
+      const viewsCell = findSafeViewsCell(worksheet, link, format, allLinkCells);
+      return {
+        ...link,
+        viewsRow: viewsCell.row,
+        viewsCol: viewsCell.col,
+      };
+    });
+
+    // Update job with total links count
+    await supabase
+      .from('processing_jobs')
+      .update({ total_links: instagramLinks.length })
+      .eq('id', jobId);
 
     // Get app settings for API mode
     const { data: settings } = await supabase
@@ -262,8 +415,8 @@ async function processJob(jobId: string, supabase: any) {
     const apiMode = settings?.api_mode || 'demo';
     console.log(`Using API mode: ${apiMode}`);
 
-    // Fetch views
-    const viewsMap: Record<string, number | string> = {};
+    // Fetch views - keyed by Instagram ID
+    const viewsByIgId: Record<string, number | string> = {};
     const batchSize = 10;
     let processedCount = 0;
     let failedCount = 0;
@@ -271,7 +424,7 @@ async function processJob(jobId: string, supabase: any) {
     if (apiMode === 'demo') {
       for (let i = 0; i < instagramLinks.length; i++) {
         const link = instagramLinks[i];
-        viewsMap[link.url] = generateDemoViews();
+        viewsByIgId[link.igId] = generateDemoViews();
         processedCount++;
 
         // Update progress every 10 links
@@ -304,15 +457,20 @@ async function processJob(jobId: string, supabase: any) {
             batchViews = await fetchWithApify(batch, apiKey);
           }
 
-          Object.entries(batchViews).forEach(([url, views]) => {
-            viewsMap[url] = views;
+          // Merge batch results
+          Object.entries(batchViews).forEach(([igId, views]) => {
+            viewsByIgId[igId] = views;
             if (views === 'Error') failedCount++;
           });
         } catch (error) {
           console.error('Batch error:', error);
+          // Mark all in batch as Error by their IDs
           batch.forEach(url => {
-            viewsMap[url] = 'Error';
-            failedCount++;
+            const igId = extractInstagramId(url);
+            if (igId) {
+              viewsByIgId[igId] = 'Error';
+              failedCount++;
+            }
           });
         }
 
@@ -324,10 +482,19 @@ async function processJob(jobId: string, supabase: any) {
       }
     }
 
-    // Update Excel with views
+    // Log summary
+    const successCount = Object.values(viewsByIgId).filter(v => typeof v === 'number').length;
+    const naCount = Object.values(viewsByIgId).filter(v => v === 'N/A').length;
+    const errorCount = Object.values(viewsByIgId).filter(v => v === 'Error').length;
+    console.log(`Views summary: ${successCount} success, ${naCount} N/A, ${errorCount} Error`);
+
+    // Update Excel with views - lookup by Instagram ID
     for (const link of instagramLinks) {
-      const views = viewsMap[link.url];
-      if (views === undefined) continue;
+      const views = viewsByIgId[link.igId];
+      if (views === undefined) {
+        console.log(`No views found for ID=${link.igId}`);
+        continue;
+      }
 
       const cell = worksheet.getCell(link.viewsRow, link.viewsCol);
       const numericViews = typeof views === 'string' ? parseInt(views, 10) : views;
