@@ -142,6 +142,65 @@ export function useUpdateJob() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['processing-jobs'] });
       queryClient.invalidateQueries({ queryKey: ['active-job'] });
+      queryClient.invalidateQueries({ queryKey: ['job'] });
     },
   });
+}
+
+// Hook to fetch a single job by ID with polling and realtime updates
+export function useJob(jobId: string | undefined) {
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
+    queryKey: ['job', jobId],
+    queryFn: async () => {
+      if (!jobId) return null;
+      
+      const { data, error } = await supabase
+        .from('processing_jobs')
+        .select('*')
+        .eq('id', jobId)
+        .single();
+
+      if (error) throw error;
+      return data as ProcessingJob;
+    },
+    enabled: !!jobId,
+    refetchInterval: (query) => {
+      const job = query.state.data;
+      // Poll every 2 seconds while processing or pending
+      if (job?.status === 'processing' || job?.status === 'pending') {
+        return 2000;
+      }
+      return false;
+    },
+  });
+
+  // Subscribe to realtime updates for this specific job
+  useEffect(() => {
+    if (!jobId) return;
+
+    const channel = supabase
+      .channel(`job-status-${jobId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'processing_jobs',
+          filter: `id=eq.${jobId}`,
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['job', jobId] });
+          queryClient.invalidateQueries({ queryKey: ['processing-jobs'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [jobId, queryClient]);
+
+  return query;
 }
