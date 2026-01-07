@@ -256,10 +256,24 @@ function extractViewsFromObject(obj: any): number | undefined {
   if (!obj || typeof obj !== 'object') return undefined;
   
   // Try common field names for views
-  const viewFields = ['view_count', 'play_count', 'video_play_count', 'video_view_count'];
+  const viewFields = ['view_count', 'play_count', 'video_play_count', 'video_view_count', 'fb_play_count'];
   for (const field of viewFields) {
     if (typeof obj[field] === 'number') {
       return obj[field];
+    }
+  }
+  
+  // Try nested clips_metadata (common for reels)
+  if (obj.clips_metadata && typeof obj.clips_metadata === 'object') {
+    for (const field of viewFields) {
+      if (typeof obj.clips_metadata[field] === 'number') return obj.clips_metadata[field];
+    }
+  }
+  
+  // Try nested video_versions array
+  if (Array.isArray(obj.video_versions) && obj.video_versions[0]) {
+    for (const field of viewFields) {
+      if (typeof obj.video_versions[0][field] === 'number') return obj.video_versions[0][field];
     }
   }
   
@@ -346,11 +360,15 @@ async function fetchSingleHikerUrl(url: string, apiKey: string, debugIndex: numb
     const result = await tryHikerRequest(targetUrl, apiKey);
     
     if (result.ok) {
-      // Log structure for first few requests for debugging
-      if (debugIndex < 3 && result.raw) {
+      // Log FULL media_or_ad for first 2 requests to see exact structure
+      if (debugIndex < 2 && result.raw) {
         const topKeys = Object.keys(result.raw);
-        const mediaOrAdKeys = result.raw?.media_or_ad ? Object.keys(result.raw.media_or_ad) : [];
-        console.log(`Hiker debug ID=${igId}: topKeys=[${topKeys.join(',')}], media_or_ad keys=[${mediaOrAdKeys.slice(0, 10).join(',')}]`);
+        console.log(`Hiker DEBUG ID=${igId}: topKeys=[${topKeys.join(',')}]`);
+        if (result.raw?.media_or_ad) {
+          // Log full media_or_ad structure (truncated to 3000 chars)
+          const fullMediaOrAd = JSON.stringify(result.raw.media_or_ad, null, 0);
+          console.log(`Hiker DEBUG ID=${igId} media_or_ad FULL: ${fullMediaOrAd.slice(0, 3000)}`);
+        }
       }
       
       if (result.views !== undefined) {
