@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { format } from 'date-fns';
@@ -13,6 +13,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Timer,
 } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -21,7 +22,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { useJob, useUpdateJob, usePauseJob, useResumeJob } from '@/hooks/useProcessingJobs';
 import { supabase } from '@/integrations/supabase/client';
-import { cn } from '@/lib/utils';
+import { cn, formatDuration } from '@/lib/utils';
 import { toast } from 'sonner';
 
 export default function ProcessingStatus() {
@@ -39,6 +40,36 @@ export default function ProcessingStatus() {
   const progress = job && job.total_links > 0 
     ? Math.round((job.processed_links / job.total_links) * 100) 
     : 0;
+
+  // Time tracking
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (job?.status !== 'processing') return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [job?.status]);
+
+  const timeInfo = useMemo(() => {
+    if (!job) return null;
+
+    const startTime = new Date(job.created_at).getTime();
+
+    if (job.status === 'completed' && job.completed_at) {
+      const endTime = new Date(job.completed_at).getTime();
+      return { type: 'completed' as const, duration: endTime - startTime };
+    }
+
+    if (job.status === 'processing' && job.processed_links > 0) {
+      const elapsedMs = now - startTime;
+      const avgTimePerLink = elapsedMs / job.processed_links;
+      const remainingLinks = job.total_links - job.processed_links;
+      const estimatedRemainingMs = avgTimePerLink * remainingLinks;
+      return { type: 'processing' as const, remaining: estimatedRemainingMs };
+    }
+
+    return null;
+  }, [job, now]);
 
   const handleDownload = async (isPartial = false) => {
     if (!job) return;
@@ -333,11 +364,19 @@ export default function ProcessingStatus() {
                     )}
                     Download Processed File
                   </Button>
-                  {job.completed_at && (
-                    <p className="text-xs text-muted-foreground text-center mt-2">
-                      Completed {format(new Date(job.completed_at), 'MMM d, yyyy • h:mm a')}
-                    </p>
-                  )}
+                  <div className="text-center mt-2 space-y-1">
+                    {timeInfo?.type === 'completed' && (
+                      <p className="text-sm font-medium text-success flex items-center justify-center gap-1">
+                        <Timer className="w-4 h-4" />
+                        Completed in {formatDuration(timeInfo.duration)}
+                      </p>
+                    )}
+                    {job.completed_at && (
+                      <p className="text-xs text-muted-foreground">
+                        Finished {format(new Date(job.completed_at), 'MMM d, yyyy • h:mm a')}
+                      </p>
+                    )}
+                  </div>
                   {job.failed_links > 0 && (
                     <div className="mt-4 p-3 bg-warning/10 border border-warning/20 rounded-lg">
                       <p className="text-sm text-warning-foreground">
@@ -351,11 +390,20 @@ export default function ProcessingStatus() {
               {/* Processing Animation */}
               {isProcessing && (
                 <div className="space-y-4 py-4">
-                  <div className="flex items-center justify-center">
+                  <div className="flex flex-col items-center justify-center gap-1">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="w-4 h-4 animate-spin" />
                       <span>Processing links... ({job.processed_links}/{job.total_links})</span>
                     </div>
+                    {timeInfo?.type === 'processing' && (
+                      <p className="text-xs text-muted-foreground flex items-center gap-1">
+                        <Timer className="w-3 h-3" />
+                        Estimated: ~{formatDuration(timeInfo.remaining)} remaining
+                      </p>
+                    )}
+                    {job.processed_links === 0 && (
+                      <p className="text-xs text-muted-foreground">Calculating time...</p>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     <Button
