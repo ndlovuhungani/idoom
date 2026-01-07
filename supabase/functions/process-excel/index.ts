@@ -251,20 +251,37 @@ async function fetchWithApify(urls: string[], apiKey: string): Promise<Record<st
   return viewsByIgId;
 }
 
-async function fetchSingleHikerUrl(url: string, apiKey: string): Promise<{ igId: string; views: number | string }> {
-  const igId = extractInstagramId(url);
-  if (!igId) {
-    console.log(`Hiker: Could not extract ID from ${url}`);
-    return { igId: '', views: 'Error' };
+// Helper to extract views from any object structure
+function extractViewsFromObject(obj: any): number | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+  
+  // Try common field names for views
+  const viewFields = ['view_count', 'play_count', 'video_play_count', 'video_view_count'];
+  for (const field of viewFields) {
+    if (typeof obj[field] === 'number') {
+      return obj[field];
+    }
   }
+  
+  // Try nested metrics/insights objects
+  if (obj.metrics && typeof obj.metrics === 'object') {
+    for (const field of viewFields) {
+      if (typeof obj.metrics[field] === 'number') return obj.metrics[field];
+    }
+  }
+  if (obj.insights && typeof obj.insights === 'object') {
+    for (const field of viewFields) {
+      if (typeof obj.insights[field] === 'number') return obj.insights[field];
+    }
+  }
+  
+  return undefined;
+}
 
-  // Canonicalize URL to /p/{shortcode}/ format for better API compatibility
-  const canonicalUrl = `https://www.instagram.com/p/${igId}/`;
-
+async function tryHikerRequest(targetUrl: string, apiKey: string): Promise<{ ok: boolean; views?: number; raw?: any }> {
   try {
-    // Use the /v2/media/info/by/url endpoint (more reliable)
     const response = await fetch(
-      `https://api.hikerapi.com/v2/media/info/by/url?url=${encodeURIComponent(canonicalUrl)}`,
+      `https://api.hikerapi.com/v2/media/info/by/url?url=${encodeURIComponent(targetUrl)}`,
       {
         headers: {
           'accept': 'application/json',
@@ -274,43 +291,82 @@ async function fetchSingleHikerUrl(url: string, apiKey: string): Promise<{ igId:
     );
 
     if (!response.ok) {
-      console.log(`Hiker: Error ${response.status} for ID=${igId}`);
-      return { igId, views: 'Error' };
+      return { ok: false };
     }
 
     const raw = await response.json();
     
-    // Log response structure for debugging (once per first request)
-    console.log(`Hiker response for ID=${igId}: keys=${Object.keys(raw).join(',')}`);
-    
-    // Try multiple possible response structures
+    // Try to extract views from various locations
     let views: number | undefined;
     
-    // Direct top-level fields
-    views = raw?.view_count ?? raw?.play_count ?? raw?.video_play_count;
+    // 1. Direct top-level
+    views = extractViewsFromObject(raw);
     
-    // Nested under 'data'
+    // 2. Under 'media_or_ad' (common Hiker response shape)
+    if (views === undefined && raw?.media_or_ad) {
+      views = extractViewsFromObject(raw.media_or_ad);
+    }
+    
+    // 3. Under 'data'
     if (views === undefined && raw?.data) {
-      views = raw.data.view_count ?? raw.data.play_count ?? raw.data.video_play_count;
+      views = extractViewsFromObject(raw.data);
     }
     
-    // Nested under 'items' array
+    // 4. Under 'items' array
     if (views === undefined && Array.isArray(raw?.items) && raw.items[0]) {
-      const item = raw.items[0];
-      views = item.view_count ?? item.play_count ?? item.video_play_count;
+      views = extractViewsFromObject(raw.items[0]);
     }
     
-    // Nested under 'media'
+    // 5. Under 'media'
     if (views === undefined && raw?.media) {
-      views = raw.media.view_count ?? raw.media.play_count ?? raw.media.video_play_count;
+      views = extractViewsFromObject(raw.media);
     }
     
-    console.log(`Hiker result: ID=${igId}, views=${views}`);
-    return { igId, views: views !== undefined && views !== null ? views : 'N/A' };
-  } catch (error) {
-    console.error(`Hiker: Exception for ID=${igId}:`, error);
-    return { igId, views: 'Error' };
+    return { ok: true, views, raw };
+  } catch {
+    return { ok: false };
   }
+}
+
+async function fetchSingleHikerUrl(url: string, apiKey: string, debugIndex: number = 0): Promise<{ igId: string; views: number | string }> {
+  const igId = extractInstagramId(url);
+  if (!igId) {
+    console.log(`Hiker: Could not extract ID from ${url}`);
+    return { igId: '', views: 'Error' };
+  }
+
+  // Try multiple URL formats to reduce 404s
+  const urlsToTry = [
+    url.trim(), // Original URL first
+    `https://www.instagram.com/reel/${igId}/`,
+    `https://www.instagram.com/p/${igId}/`,
+  ];
+
+  for (const targetUrl of urlsToTry) {
+    const result = await tryHikerRequest(targetUrl, apiKey);
+    
+    if (result.ok) {
+      // Log structure for first few requests for debugging
+      if (debugIndex < 3 && result.raw) {
+        const topKeys = Object.keys(result.raw);
+        const mediaOrAdKeys = result.raw?.media_or_ad ? Object.keys(result.raw.media_or_ad) : [];
+        console.log(`Hiker debug ID=${igId}: topKeys=[${topKeys.join(',')}], media_or_ad keys=[${mediaOrAdKeys.slice(0, 10).join(',')}]`);
+      }
+      
+      if (result.views !== undefined) {
+        console.log(`Hiker result: ID=${igId}, views=${result.views}`);
+        return { igId, views: result.views };
+      } else {
+        // Got 200 but no views found - treat as N/A (parse failure)
+        console.log(`Hiker result: ID=${igId}, 200 OK but no view field found`);
+        return { igId, views: 'N/A' };
+      }
+    }
+  }
+
+  // All URL attempts failed (404 or other error)
+  console.log(`Hiker: All URL formats failed for ID=${igId}`);
+  return { igId, views: 'Error' };
 }
 
 function generateDemoViews(): number {
@@ -468,11 +524,11 @@ async function processJob(jobId: string, supabase: any) {
       
       for (let i = 0; i < instagramLinks.length; i++) {
         const link = instagramLinks[i];
-        const result = await fetchSingleHikerUrl(link.url, apiKey);
+        const result = await fetchSingleHikerUrl(link.url, apiKey, i);
         
         if (result.igId) {
           viewsByIgId[result.igId] = result.views;
-          if (result.views === 'Error') failedCount++;
+          if (result.views === 'Error' || result.views === 'N/A') failedCount++;
         }
         
         processedCount = i + 1;
