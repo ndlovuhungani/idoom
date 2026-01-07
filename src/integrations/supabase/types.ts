@@ -87,9 +87,12 @@ export type Database = {
           failed_links: number
           file_name: string
           id: string
+          partial_result_path: string | null
+          paused_at: string | null
           processed_links: number
           result_file_path: string | null
           result_file_url: string | null
+          resume_from_index: number | null
           source_file_path: string | null
           status: Database["public"]["Enums"]["job_status"]
           total_links: number
@@ -103,9 +106,12 @@ export type Database = {
           failed_links?: number
           file_name: string
           id?: string
+          partial_result_path?: string | null
+          paused_at?: string | null
           processed_links?: number
           result_file_path?: string | null
           result_file_url?: string | null
+          resume_from_index?: number | null
           source_file_path?: string | null
           status?: Database["public"]["Enums"]["job_status"]
           total_links?: number
@@ -119,9 +125,12 @@ export type Database = {
           failed_links?: number
           file_name?: string
           id?: string
+          partial_result_path?: string | null
+          paused_at?: string | null
           processed_links?: number
           result_file_path?: string | null
           result_file_url?: string | null
+          resume_from_index?: number | null
           source_file_path?: string | null
           status?: Database["public"]["Enums"]["job_status"]
           total_links?: number
@@ -195,7 +204,7 @@ export type Database = {
     Enums: {
       api_mode: "apify" | "hiker" | "demo"
       app_role: "admin" | "user"
-      job_status: "pending" | "processing" | "completed" | "failed"
+      job_status: "pending" | "processing" | "completed" | "failed" | "paused"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -325,7 +334,7 @@ export const Constants = {
     Enums: {
       api_mode: ["apify", "hiker", "demo"],
       app_role: ["admin", "user"],
-      job_status: ["pending", "processing", "completed", "failed"],
+      job_status: ["pending", "processing", "completed", "failed", "paused"],
     },
   },
 } as const

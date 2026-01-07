@@ -9,6 +9,7 @@ import {
   Clock,
   Download,
   ExternalLink,
+  Pause,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +29,7 @@ const statusConfig: Record<
   failed: { label: 'Failed', icon: XCircle, variant: 'destructive' },
   processing: { label: 'Processing', icon: Loader2, variant: 'secondary' },
   pending: { label: 'Pending', icon: Clock, variant: 'outline' },
+  paused: { label: 'Paused', icon: Pause, variant: 'outline' },
 };
 
 export default function JobCard({ job, onDownload }: JobCardProps) {

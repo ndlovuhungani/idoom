@@ -10,13 +10,16 @@ import {
   Loader2,
   FileSpreadsheet,
   RotateCcw,
+  Pause,
+  Play,
+  RefreshCw,
 } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { useJob, useUpdateJob } from '@/hooks/useProcessingJobs';
+import { useJob, useUpdateJob, usePauseJob, useResumeJob } from '@/hooks/useProcessingJobs';
 import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -24,64 +27,100 @@ import { toast } from 'sonner';
 export default function ProcessingStatus() {
   const { jobId } = useParams();
   const navigate = useNavigate();
-  const [isResetting, setIsResetting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloadingPartial, setIsDownloadingPartial] = useState(false);
 
   const { data: job } = useJob(jobId);
   const updateJob = useUpdateJob();
+  const pauseJob = usePauseJob();
+  const resumeJob = useResumeJob();
 
   // Guard against division by zero
   const progress = job && job.total_links > 0 
     ? Math.round((job.processed_links / job.total_links) * 100) 
     : 0;
 
-  const handleDownload = async () => {
+  const handleDownload = async (isPartial = false) => {
     if (!job) return;
     
-    setIsDownloading(true);
+    const setLoading = isPartial ? setIsDownloadingPartial : setIsDownloading;
+    const filePath = isPartial ? job.partial_result_path : job.result_file_path;
+    const fileName = isPartial ? `partial_${job.file_name}` : `processed_${job.file_name}`;
+    
+    setLoading(true);
     try {
-      if (job.result_file_path) {
+      if (filePath) {
         const { data, error } = await supabase.storage
           .from('excel-files')
-          .download(job.result_file_path);
+          .download(filePath);
 
         if (error) throw error;
 
         const url = URL.createObjectURL(data);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `processed_${job.file_name}`;
+        link.download = fileName;
         link.click();
         URL.revokeObjectURL(url);
-      } else if (job.result_file_url) {
+        toast.success(isPartial ? 'Partial file downloaded' : 'File downloaded');
+      } else if (!isPartial && job.result_file_url) {
         // Legacy: blob URL support
         const link = document.createElement('a');
         link.href = job.result_file_url;
-        link.download = `processed_${job.file_name}`;
+        link.download = fileName;
         link.click();
+      } else {
+        toast.error('No file available to download');
       }
     } catch (error) {
       toast.error('Failed to download file');
     } finally {
-      setIsDownloading(false);
+      setLoading(false);
     }
   };
 
-  const handleRetry = async () => {
+  const handlePause = async () => {
     if (!job) return;
-    setIsResetting(true);
+    try {
+      await pauseJob.mutateAsync(job.id);
+      toast.success('Pausing job... It will stop at the next checkpoint.');
+    } catch (error) {
+      toast.error('Failed to pause job');
+    }
+  };
+
+  const handleResume = async () => {
+    if (!job) return;
+    try {
+      await resumeJob.mutateAsync(job.id);
+      toast.success('Resuming processing...');
+    } catch (error) {
+      toast.error('Failed to resume job');
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!job) return;
     try {
       await updateJob.mutateAsync({
         id: job.id,
         status: 'failed',
         error_message: 'Job cancelled by user',
       });
-      toast.success('Job marked as failed. You can upload the file again.');
-      navigate('/dashboard');
+      toast.success('Job cancelled.');
     } catch (error) {
-      toast.error('Failed to reset job');
-    } finally {
-      setIsResetting(false);
+      toast.error('Failed to cancel job');
+    }
+  };
+
+  const handleRetryFailed = async () => {
+    if (!job) return;
+    // Reset the job to retry from the current position
+    try {
+      await resumeJob.mutateAsync(job.id);
+      toast.success('Retrying failed links...');
+    } catch (error) {
+      toast.error('Failed to retry');
     }
   };
 
@@ -104,6 +143,12 @@ export default function ProcessingStatus() {
       </AppLayout>
     );
   }
+
+  const isPaused = job.status === 'paused';
+  const isProcessing = job.status === 'processing';
+  const isFailed = job.status === 'failed';
+  const isCompleted = job.status === 'completed';
+  const hasPartialResults = !!job.partial_result_path;
 
   return (
     <AppLayout>
@@ -133,21 +178,24 @@ export default function ProcessingStatus() {
               </div>
               <Badge
                 variant={
-                  job.status === 'completed'
+                  isCompleted
                     ? 'default'
-                    : job.status === 'failed'
+                    : isFailed
                     ? 'destructive'
+                    : isPaused
+                    ? 'outline'
                     : 'secondary'
                 }
-                className={cn(job.status === 'processing' && 'animate-pulse')}
+                className={cn(isProcessing && 'animate-pulse')}
               >
-                {job.status === 'processing' && (
+                {isProcessing && (
                   <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                 )}
-                {job.status === 'completed' && (
+                {isCompleted && (
                   <CheckCircle2 className="w-3 h-3 mr-1" />
                 )}
-                {job.status === 'failed' && <XCircle className="w-3 h-3 mr-1" />}
+                {isFailed && <XCircle className="w-3 h-3 mr-1" />}
+                {isPaused && <Pause className="w-3 h-3 mr-1" />}
                 {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
               </Badge>
             </div>
@@ -179,31 +227,101 @@ export default function ProcessingStatus() {
                 </div>
               </div>
 
+              {/* Paused State */}
+              {isPaused && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="p-4 bg-muted border border-border rounded-lg space-y-3"
+                >
+                  <div className="flex items-center gap-2 text-sm">
+                    <Pause className="w-4 h-4 text-muted-foreground" />
+                    <span>Processing paused at {job.processed_links} of {job.total_links} links</span>
+                  </div>
+                  {job.paused_at && (
+                    <p className="text-xs text-muted-foreground">
+                      Paused {format(new Date(job.paused_at), 'MMM d, yyyy • h:mm a')}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      onClick={handleResume}
+                      className="gradient-primary text-primary-foreground"
+                      disabled={resumeJob.isPending}
+                    >
+                      {resumeJob.isPending ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Play className="w-4 h-4 mr-2" />
+                      )}
+                      Resume Processing
+                    </Button>
+                    {hasPartialResults && (
+                      <Button
+                        variant="outline"
+                        onClick={() => handleDownload(true)}
+                        disabled={isDownloadingPartial}
+                      >
+                        {isDownloadingPartial ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <Download className="w-4 h-4 mr-2" />
+                        )}
+                        Download Partial Results
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      onClick={handleCancel}
+                    >
+                      <XCircle className="w-4 h-4 mr-2" />
+                      Cancel Job
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+
               {/* Error Message */}
-              {job.status === 'failed' && job.error_message && (
-                <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
+              {isFailed && job.error_message && (
+                <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg space-y-3">
                   <p className="text-sm text-destructive">{job.error_message}</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3"
-                    onClick={() => navigate('/dashboard')}
-                  >
-                    <RotateCcw className="w-4 h-4 mr-2" />
-                    Try Again with New Upload
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    {hasPartialResults && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDownload(true)}
+                        disabled={isDownloadingPartial}
+                      >
+                        {isDownloadingPartial ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <Download className="w-4 h-4 mr-2" />
+                        )}
+                        Download Partial Results
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate('/dashboard')}
+                    >
+                      <RotateCcw className="w-4 h-4 mr-2" />
+                      Try Again with New Upload
+                    </Button>
+                  </div>
                 </div>
               )}
 
               {/* Download Button */}
-              {job.status === 'completed' && (
+              {isCompleted && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="pt-4"
                 >
                   <Button
-                    onClick={handleDownload}
+                    onClick={() => handleDownload(false)}
                     className="w-full gradient-primary text-primary-foreground"
                     size="lg"
                     disabled={isDownloading}
@@ -220,32 +338,63 @@ export default function ProcessingStatus() {
                       Completed {format(new Date(job.completed_at), 'MMM d, yyyy • h:mm a')}
                     </p>
                   )}
+                  {job.failed_links > 0 && (
+                    <div className="mt-4 p-3 bg-warning/10 border border-warning/20 rounded-lg">
+                      <p className="text-sm text-warning-foreground">
+                        {job.failed_links} links failed to fetch views. They are marked as "Error" in the file.
+                      </p>
+                    </div>
+                  )}
                 </motion.div>
               )}
 
               {/* Processing Animation */}
-              {job.status === 'processing' && (
+              {isProcessing && (
                 <div className="space-y-4 py-4">
                   <div className="flex items-center justify-center">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Processing links...</span>
+                      <span>Processing links... ({job.processed_links}/{job.total_links})</span>
                     </div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    onClick={handleRetry}
-                    disabled={isResetting}
-                  >
-                    {isResetting ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    ) : (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      onClick={handlePause}
+                      disabled={pauseJob.isPending}
+                    >
+                      {pauseJob.isPending ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Pause className="w-4 h-4 mr-2" />
+                      )}
+                      Pause Processing
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={handleCancel}
+                    >
                       <XCircle className="w-4 h-4 mr-2" />
-                    )}
-                    Cancel Processing
-                  </Button>
+                      Cancel
+                    </Button>
+                  </div>
+                  {hasPartialResults && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full"
+                      onClick={() => handleDownload(true)}
+                      disabled={isDownloadingPartial}
+                    >
+                      {isDownloadingPartial ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4 mr-2" />
+                      )}
+                      Download Current Progress
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
